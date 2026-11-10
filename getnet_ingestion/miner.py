@@ -25,7 +25,7 @@ DEFAULT_OUTPUT = Path(__file__).parent / "data" / "getnet_en_sections.jsonl"
 RELATED_CONTENT_HEADINGS = {"latest posts", "related articles", "related posts", "you may also like"}
 
 HEADING_TAGS = {f"h{level}" for level in range(1, 7)}
-TEXT_TAGS = {"p", "li", "blockquote", "dt", "dd", "td", "th"}
+TEXT_TAGS = {"p", "li", "blockquote", "dt", "dd"}
 EXCLUDED_TAGS = {
     "aside",
     "footer",
@@ -214,20 +214,14 @@ def _extract_sections(page: html.HtmlElement, url: str, extracted_at: str) -> li
     sections: list[dict[str, str]] = []
     seen_section_ids: set[str] = set()
     current_heading: str | None = None
+    heading_path: list[tuple[int, str]] = []
     current_text: list[str] = []
+    skipped_nodes: set[html.HtmlElement] = set()
 
-    def flush() -> None:
-        body = _clean_text(" ".join(current_text))
-        heading = current_heading or "Overview"
-        if current_heading is None and not body:
+    def append_section(heading: str, body: str) -> None:
+        if not heading and not body:
             return
-        text_parts = []
-        if page_title:
-            text_parts.append(page_title)
-        text_parts.append(heading)
-        if body:
-            text_parts.append(body)
-        text = "\n".join(text_parts)
+        text = "\n".join(part for part in (heading, body) if part)
         content_id = hashlib.sha256(f"{url}\n{heading}\n{text}".encode("utf-8")).hexdigest()
         if content_id in seen_section_ids:
             return
@@ -237,7 +231,7 @@ def _extract_sections(page: html.HtmlElement, url: str, extracted_at: str) -> li
                 "id": content_id,
                 "url": url,
                 "page_title": page_title,
-                "section_heading": heading,
+                "section_heading": heading or "Overview",
                 "category": classify_url(url),
                 "language": "en",
                 "extracted_at": extracted_at,
@@ -245,9 +239,62 @@ def _extract_sections(page: html.HtmlElement, url: str, extracted_at: str) -> li
             }
         )
 
+    def flush() -> None:
+        body = "\n".join(current_text)
+        heading = current_heading or "Overview"
+        if current_heading is None and not body:
+            return
+        append_section(heading, body)
+
     for node in root.iterdescendants():
+        if node in skipped_nodes:
+            continue
         tag = node.tag.lower() if isinstance(node.tag, str) else ""
         if tag in EXCLUDED_TAGS:
+            continue
+        if "carousel-item" in (node.get("class") or "").split():
+            flush()
+            title_nodes = node.xpath(
+                './/*[contains(concat(" ", normalize-space(@class), " "), '
+                '" imageandtextbanner-title ")]'
+            )
+            card_title = _clean_text(title_nodes[0].text_content()) if title_nodes else ""
+            if card_title:
+                heading = " - ".join(
+                    part for part in (current_heading or page_title, card_title) if part
+                )
+                card_text: list[str] = []
+                for selector in (
+                    './/*[contains(concat(" ", normalize-space(@class), " "), '
+                    '" imageandtextbanner-pretitle ")]',
+                    './/*[contains(concat(" ", normalize-space(@class), " "), '
+                    '" imageandtextbanner-subtitle ")]',
+                ):
+                    card_text.extend(
+                        text
+                        for text in (
+                            _clean_text(element.text_content())
+                            for element in node.xpath(selector)
+                        )
+                        if text
+                    )
+                descriptions = node.xpath(
+                    './/*[contains(concat(" ", normalize-space(@class), " "), '
+                    '" imageandtextbanner-description ")]'
+                )
+                for description in descriptions:
+                    card_text.extend(
+                        text
+                        for text in (
+                            _clean_text(element.text_content())
+                            for element in description.xpath(
+                                ".//p|.//li|.//blockquote|.//dt|.//dd|.//td|.//th"
+                            )
+                        )
+                        if text
+                    )
+                append_section(heading, "\n".join(card_text))
+            skipped_nodes.update(node.iterdescendants())
             continue
         if tag in HEADING_TAGS:
             heading_text = _clean_text(node.text_content())
@@ -258,8 +305,61 @@ def _extract_sections(page: html.HtmlElement, url: str, extracted_at: str) -> li
                 flush()
                 break
             flush()
-            current_heading = heading_text
+            level = int(tag[1])
+            if level == 1:
+                heading_path.clear()
+                current_heading = " - ".join(
+                    part for part in (page_title, heading_text) if part
+                )
+            else:
+                while heading_path and heading_path[-1][0] >= level:
+                    heading_path.pop()
+                heading_path.append((level, heading_text))
+                current_heading = " - ".join(
+                    part
+                    for part in (
+                        page_title,
+                        *(heading for _, heading in heading_path),
+                    )
+                    if part
+                )
             current_text = []
+        elif tag == "tr":
+            cells = node.xpath("./th|./td")
+            if cells and all(cell.tag.lower() == "th" for cell in cells):
+                skipped_nodes.update(node.iterdescendants())
+                continue
+
+            tables = node.xpath("ancestor::table[1]")
+            header_cells = []
+            if tables:
+                header_rows = [
+                    row
+                    for row in tables[0].xpath(".//tr")
+                    if (row_cells := row.xpath("./th|./td"))
+                    and all(cell.tag.lower() == "th" for cell in row_cells)
+                ]
+                if header_rows:
+                    header_cells = header_rows[0].xpath("./th|./td")
+
+            if cells and len(header_cells) == len(cells):
+                flush()
+                base_heading = current_heading or page_title or "Overview"
+                subject = _clean_text(cells[0].text_content())
+                for index, cell in enumerate(cells):
+                    value = _clean_text(cell.text_content())
+                    if not value:
+                        continue
+                    column = _clean_text(header_cells[index].text_content())
+                    heading = " - ".join(
+                        part for part in (base_heading, subject, column) if part
+                    )
+                    append_section(heading, value)
+            else:
+                row_text = _clean_text(" ".join(cell.text_content() for cell in cells))
+                if row_text:
+                    current_text.append(row_text)
+            skipped_nodes.update(node.iterdescendants())
         elif tag in TEXT_TAGS:
             text = _clean_text(node.text_content())
             if text:
