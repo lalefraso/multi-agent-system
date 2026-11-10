@@ -1,7 +1,12 @@
 [llm]
-model = "openai:gpt-5.4"
+model = "openai:gpt-6-luna"
 fallback_models = [
-  "anthropic:claude-3-5-haiku-latest",
-  "baseten",
+  "claude-fable-5-2",
+  "baseten:moonshotai/Kimi-K2.6",
 ]
 thinking_level = "medium"
+
+[knowledge]
+vector_index = "idx:getnet"
+vector_result_count = 5
+allowed_urls = ["https://www.linkedin.com/company/getnetworld/"]

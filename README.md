@@ -1,9 +1,10 @@
 # Getnet Multi-Agent System
 
-Initial API and schema skeleton for the Getnet multi-agent support system. The
-router is the entry point and has two tools: a knowledge agent and a customer
-support agent. Those agents currently return an explicit `not_implemented`
-result; their retrieval and customer-data behavior will be added separately.
+Initial API and schema for the Getnet multi-agent support system. The router is
+the entry point and has two tools: a knowledge agent and a customer support
+agent. The knowledge agent uses the configured Redis vector index and
+allowlisted external resources. Customer support remains an explicit
+`not_implemented` stub for its later implementation.
 
 ## Architecture
 
@@ -30,6 +31,15 @@ the tools exposed to its model to `knowledge_agent` and
 `customer_support_agent`. The fallback middleware logs provider attempts,
 message counts, duration, and success/failure using Python logging; it does not
 log prompt or response contents.
+
+The knowledge agent has its own two-tool boundary: `vector_search` queries the
+existing `idx:getnet` index with the same multilingual E5 model and `query: `
+prefix used by ingestion, and `external_resource_search` uses Tavily Extract.
+Add exact HTTPS page URLs to `[knowledge].allowed_urls` in `settings.toml`.
+External lookup stays disabled while the list is empty; it never accepts a URL
+from the user's query, passes only configured URLs to Tavily, and filters
+returned source URLs against that exact list. Set `TAVILY_API_KEY` in `.env`
+when enabling external lookup.
 
 ## Configuration and run
 

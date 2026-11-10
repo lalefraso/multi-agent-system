@@ -3,24 +3,13 @@ from __future__ import annotations
 from deepagents import create_deep_agent
 from langchain.tools import tool
 
+from app.agents.knowledge import knowledge_agent
 from app.llm import ProviderFallbackMiddleware, build_chat_model
 from app.schemas import (
     AgentResult,
     AgentStatus,
     CustomerSupportAgentInput,
-    KnowledgeAgentInput,
 )
-
-
-@tool("knowledge_agent", args_schema=KnowledgeAgentInput)
-def knowledge_agent(query: str, user_id: str) -> str:
-    """Answer questions about Getnet products and services using the knowledge base."""
-    del query, user_id
-    return AgentResult(
-        agent="knowledge",
-        status=AgentStatus.NOT_IMPLEMENTED,
-        message="The knowledge agent has not been implemented yet.",
-    ).model_dump_json()
 
 
 @tool("customer_support_agent", args_schema=CustomerSupportAgentInput)

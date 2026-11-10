@@ -52,6 +52,19 @@ class CustomerSupportAgentInput(AgentToolInput):
     pass
 
 
+class VectorSearchInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    query: str = Field(min_length=1, max_length=4000)
+    result_count: int | None = Field(default=None, ge=1, le=10)
+
+
+class ExternalResourceSearchInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    query: str = Field(min_length=1, max_length=4000)
+
+
 class AgentResult(BaseModel):
     agent: AgentName
     status: AgentStatus
