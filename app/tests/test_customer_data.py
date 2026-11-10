@@ -1,11 +1,14 @@
 import json
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
+from uuid import UUID
 
-from langchain_core.messages import AIMessage, ToolMessage
+from fastapi import HTTPException
+from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from redis.exceptions import RedisError
 
 from app.main import chat
+from app.conversation_memory import ConversationMemoryError
 from app.customer_data import CustomerDataError, fetch_customer_data
 from app.schemas import AgentName, ChatRequest
 
@@ -107,8 +110,14 @@ class CustomerDataTests(unittest.TestCase):
 
         client.close.assert_called_once_with()
 
+    @patch("app.main.build_conversation_history")
     @patch("app.main._router_agent")
-    def test_customer_only_response_returns_the_query_output(self, router_agent):
+    def test_customer_only_response_returns_the_query_output(
+        self, router_agent, build_history
+    ):
+        history = Mock()
+        history.load_context.return_value = []
+        build_history.return_value = history
         lookup_output = '{"account_status":"active","user_id":"cliente1988"}'
         router_agent.return_value.invoke.return_value = {
             "messages": [
@@ -130,6 +139,69 @@ class CustomerDataTests(unittest.TestCase):
 
         self.assertEqual(response.answer, lookup_output)
         self.assertEqual(response.agents_used, [AgentName.CUSTOMER_SUPPORT])
+        self.assertIsNotNone(response.conversation_id)
+        build_history.assert_called_once_with("cliente1988", response.conversation_id)
+        history.save_turn.assert_called_once_with(
+            '{"message":"Show my account details","user_id":"cliente1988"}',
+            lookup_output,
+        )
+        history.close.assert_called_once_with()
+
+    @patch("app.main.build_conversation_history")
+    @patch("app.main._router_agent")
+    def test_chat_uses_prior_turns_and_returns_supplied_conversation_id(
+        self, router_agent, build_history
+    ):
+        conversation_id = UUID("9015dbdd-608a-443e-8ddb-a142817ad9df")
+        previous_messages = [
+            HumanMessage(content='{"message":"Earlier question","user_id":"user-1"}'),
+            AIMessage(content="Earlier answer"),
+        ]
+        history = Mock()
+        history.load_context.return_value = previous_messages.copy()
+        build_history.return_value = history
+        router_agent.return_value.invoke.return_value = {
+            "messages": [*previous_messages, AIMessage(content="Follow-up answer")]
+        }
+
+        response = chat(
+            ChatRequest(
+                message="Follow up",
+                user_id="user-1",
+                conversation_id=conversation_id,
+            )
+        )
+
+        self.assertEqual(response.conversation_id, conversation_id)
+        self.assertEqual(response.answer, "Follow-up answer")
+        router_agent.return_value.invoke.assert_called_once_with(
+            {
+                "messages": [
+                    *previous_messages,
+                    HumanMessage(
+                        content='{"message":"Follow up","user_id":"user-1"}'
+                    ),
+                ]
+            }
+        )
+        history.save_turn.assert_called_once_with(
+            '{"message":"Follow up","user_id":"user-1"}',
+            "Follow-up answer",
+        )
+        history.close.assert_called_once_with()
+
+    @patch(
+        "app.main.build_conversation_history",
+        side_effect=ConversationMemoryError("Redis unavailable"),
+    )
+    @patch("app.main._router_agent")
+    def test_chat_fails_when_conversation_memory_is_unavailable(
+        self, _router_agent, _build_history
+    ):
+        with self.assertRaises(HTTPException) as raised:
+            chat(ChatRequest(message="Hello", user_id="user-1"))
+
+        self.assertEqual(raised.exception.status_code, 503)
 
 
 if __name__ == "__main__":

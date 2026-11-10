@@ -1,4 +1,5 @@
 import unittest
+from uuid import uuid4
 
 from pydantic import ValidationError
 
@@ -40,12 +41,15 @@ class ChatSchemaTests(unittest.TestCase):
             )
 
     def test_response_has_request_id_and_explicit_status(self):
+        conversation_id = uuid4()
         response = ChatResponse(
+            conversation_id=conversation_id,
             status=AgentStatus.COMPLETED,
             answer="Customer data returned.",
         )
 
         self.assertIsNotNone(response.request_id)
+        self.assertEqual(response.conversation_id, conversation_id)
         self.assertEqual(response.status, AgentStatus.COMPLETED)
         self.assertEqual(response.agents_used, [])
 

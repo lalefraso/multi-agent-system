@@ -20,6 +20,7 @@ class ChatRequest(BaseModel):
 
     message: str = Field(min_length=1, max_length=4000)
     user_id: str = Field(min_length=1, max_length=128)
+    conversation_id: UUID | None = None
 
     @field_validator("message", "user_id")
     @classmethod
@@ -31,6 +32,7 @@ class ChatRequest(BaseModel):
 
 class ChatResponse(BaseModel):
     request_id: UUID = Field(default_factory=uuid4)
+    conversation_id: UUID
     status: AgentStatus
     answer: str
     agents_used: list[AgentName] = Field(default_factory=list)

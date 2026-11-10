@@ -10,9 +10,11 @@ not a separate LLM agent.
 ```text
 POST /chat
   -> ChatRequest schema
+  -> Redis conversation history (last 20 messages, 30-day TTL)
   -> Router agent (LangChain)
        -> knowledge_agent tool
        -> customer_support_agent tool (Redis lookup by user_id)
+  -> Redis conversation history stores the user turn and final answer
   -> ChatResponse schema
 ```
 
@@ -47,6 +49,16 @@ as JSON and reports a missing record explicitly. The user's message is not used
 to filter the record. A customer-support-only response returns the lookup
 output directly instead of asking another LLM to rewrite it.
 
+Conversation memory uses `langchain-redis` `RedisChatMessageHistory` on that
+same Redis deployment. Each conversation is scoped to both `user_id` and a
+`conversation_id`; when omitted, the API generates one and returns it in the
+response. Clients should send that ID with later turns to continue the same
+conversation. Redis expires individual messages after 30 days, and only the
+most recent 20 messages are included in the agent context. This history store
+uses Redis JSON and Redis Search, so the Redis deployment must provide those
+modules. History read/write failures return HTTP 503 rather than silently
+starting a conversation without memory.
+
 ## Configuration and run
 
 Create `.env` from [`.env.example`](./.env.example), then set the API key for
@@ -68,15 +80,20 @@ The service provides `GET /health` and `POST /chat`. Example request:
 ```json
 {
   "message": "When will the money from yesterday's sales be deposited?",
-  "user_id": "cliente1988"
+  "user_id": "cliente1988",
+  "conversation_id": "9015dbdd-608a-443e-8ddb-a142817ad9df"
 }
 ```
+
+Omit `conversation_id` on the first turn; use the ID returned by the API to
+continue that conversation.
 
 The response schema is:
 
 ```json
 {
-  "request_id": "generated-uuid",
+  "request_id": "f9270a7c-5347-452d-910c-d70c025a24a4",
+  "conversation_id": "9015dbdd-608a-443e-8ddb-a142817ad9df",
   "status": "completed",
   "answer": "{\"account_status\":\"active\",\"user_id\":\"cliente1988\"}",
   "agents_used": ["customer_support"]
