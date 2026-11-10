@@ -1,0 +1,7 @@
+[llm]
+model = "openai:gpt-5.4"
+fallback_models = [
+  "anthropic:claude-3-5-haiku-latest",
+  "baseten",
+]
+thinking_level = "medium"
