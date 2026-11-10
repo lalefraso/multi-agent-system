@@ -48,6 +48,6 @@ The persistence command stores each embedding as a Redis hash and creates a Redi
 .venv/bin/python -m getnet_ingestion.redis_store
 ```
 
-By default, the command reads `getnet_ingestion/data/getnet_en_embeddings.jsonl` and connects to `redis://localhost:6379/0`. Set `GETNET_REDIS_URL` for another endpoint, or pass `--redis-url`. The credentials in the URL should be provided through the environment and not committed to the repository. Each record is written under `getnet:en:section:<id>`; rerunning the command updates those hashes. The index name is `idx:getnet:en`.
+By default, the command reads `getnet_ingestion/data/getnet_en_embeddings.jsonl` and loads the Redis connection URL from `GETNET_REDIS_URL` or `REDIS_URL` in the repository-root `.env` file. Alternatively, pass `--redis-url`; this takes precedence over environment variables. There is no localhost fallback: the command stops with an explicit error if no URL is configured. Keep credentials in `.env`, which must not be committed. Each record is written under `getnet:en:section:<id>`; rerunning the command updates those hashes. The index name is `idx:getnet:en`.
 
 The command validates the model, vector dimension, finite vector values, and unique record IDs before writing. It does not delete Redis records absent from the current input file.

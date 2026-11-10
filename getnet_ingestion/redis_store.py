@@ -9,6 +9,7 @@ import struct
 from pathlib import Path
 from typing import Any
 
+from dotenv import load_dotenv
 from redis import Redis
 from redis.commands.search.field import TagField, TextField, VectorField
 from redis.commands.search.indexDefinition import IndexDefinition, IndexType
@@ -21,6 +22,7 @@ DEFAULT_INPUT = Path(__file__).parent / "data" / "getnet_en_embeddings.jsonl"
 DEFAULT_INDEX = "idx:getnet:en"
 DEFAULT_PREFIX = "getnet:en:section:"
 PIPELINE_BATCH_SIZE = 200
+ENV_FILE = Path(__file__).resolve().parent.parent / ".env"
 
 LOGGER = logging.getLogger(__name__)
 
@@ -108,7 +110,13 @@ def _ensure_index(client: Redis, index_name: str, prefix: str) -> None:
         index.info()
         return
     except ResponseError as exc:
-        if "unknown index name" not in str(exc).lower():
+        error_message = str(exc).lower()
+        missing_index_errors = (
+            "unknown index name",
+            "search_index_not_found",
+            "index not found",
+        )
+        if not any(marker in error_message for marker in missing_index_errors):
             raise
 
     index.create_index(
@@ -193,7 +201,7 @@ def persist(
     prefix: str = DEFAULT_PREFIX,
 ) -> int:
     records = load_embedding_records(input_path)
-    connection_url = redis_url or os.environ.get("GETNET_REDIS_URL", "redis://localhost:6379/0")
+    connection_url = _resolve_redis_url(redis_url)
     client = Redis.from_url(connection_url)
     try:
         client.ping()
@@ -206,6 +214,21 @@ def persist(
     return count
 
 
+def _resolve_redis_url(redis_url: str | None = None) -> str:
+    load_dotenv(ENV_FILE, override=False)
+    connection_url = (
+        redis_url
+        or os.environ.get("GETNET_REDIS_URL")
+        or os.environ.get("REDIS_URL")
+    )
+    if not connection_url:
+        raise RedisStoreError(
+            f"No Redis URL configured. Set GETNET_REDIS_URL or REDIS_URL in {ENV_FILE}, "
+            "or pass --redis-url."
+        )
+    return connection_url
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Persist Getnet English embeddings to a Redis vector index."
@@ -214,7 +237,7 @@ def main() -> None:
     parser.add_argument(
         "--redis-url",
         default=None,
-        help="Redis URL (defaults to GETNET_REDIS_URL or redis://localhost:6379/0)",
+        help="Redis URL (defaults to GETNET_REDIS_URL or REDIS_URL from the repository .env)",
     )
     parser.add_argument("--index", default=DEFAULT_INDEX, help="Redis Search index name")
     parser.add_argument("--prefix", default=DEFAULT_PREFIX, help="Redis key prefix")

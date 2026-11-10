@@ -1,11 +1,13 @@
 import struct
 import unittest
+from unittest.mock import patch
 
 from redis.exceptions import ResponseError
 
 from getnet_ingestion.embedder import EMBEDDING_DIMENSIONS, MODEL_NAME
 from getnet_ingestion.redis_store import (
     RedisStoreError,
+    _resolve_redis_url,
     load_embedding_records,
     persist_records,
 )
@@ -27,13 +29,14 @@ def embedding_record(record_id="section-1"):
 
 
 class FakeIndex:
-    def __init__(self, exists=False):
+    def __init__(self, exists=False, missing_error="Unknown Index name"):
         self.exists = exists
+        self.missing_error = missing_error
         self.created_schema = None
 
     def info(self):
         if not self.exists:
-            raise ResponseError("Unknown Index name")
+            raise ResponseError(self.missing_error)
         return {}
 
     def create_index(self, schema, *, definition):
@@ -70,6 +73,26 @@ class FakeRedis:
 
 
 class RedisStoreTests(unittest.TestCase):
+    @patch("getnet_ingestion.redis_store.load_dotenv")
+    def test_resolves_configured_env_url_without_localhost_fallback(self, _load_dotenv):
+        with patch.dict("os.environ", {"GETNET_REDIS_URL": "redis://example"}, clear=True):
+            self.assertEqual(_resolve_redis_url(), "redis://example")
+
+        with patch.dict("os.environ", {"REDIS_URL": "redis://legacy"}, clear=True):
+            self.assertEqual(_resolve_redis_url(), "redis://legacy")
+
+        with patch.dict("os.environ", {}, clear=True):
+            with self.assertRaisesRegex(RedisStoreError, "No Redis URL configured"):
+                _resolve_redis_url()
+
+    @patch("getnet_ingestion.redis_store.load_dotenv")
+    def test_explicit_redis_url_has_precedence(self, _load_dotenv):
+        with patch.dict("os.environ", {"GETNET_REDIS_URL": "redis://environment"}):
+            self.assertEqual(
+                _resolve_redis_url("redis://argument"),
+                "redis://argument",
+            )
+
     def test_creates_vector_index_and_persists_binary_float_vectors(self):
         client = FakeRedis()
 
@@ -96,6 +119,14 @@ class RedisStoreTests(unittest.TestCase):
         persist_records([embedding_record()], client)
 
         self.assertIsNone(client.index.created_schema)
+
+    def test_creates_index_when_server_reports_search_index_not_found(self):
+        client = FakeRedis()
+        client.index = FakeIndex(missing_error="SEARCH_INDEX_NOT_FOUND Index not found")
+
+        persist_records([embedding_record()], client)
+
+        self.assertIsNotNone(client.index.created_schema)
 
     def test_rejects_duplicate_ids_before_writing(self):
         client = FakeRedis()
