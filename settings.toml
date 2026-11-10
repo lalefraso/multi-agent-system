@@ -9,4 +9,19 @@ thinking_level = "medium"
 [knowledge]
 vector_index = "idx:getnet"
 vector_result_count = 5
-allowed_urls = ["https://www.linkedin.com/company/getnetworld/"]
+allowed_urls = [
+  "https://www.linkedin.com/company/getnetworld/",
+  "https://www.facebook.com/GetnetMx",
+  "https://www.instagram.com/getnetmx/",
+  "https://www.linkedin.com/company/getnetworld",
+  "https://www.linkedin.com/shareArticle?mini=true&url=https%3A//www.getnetworld.com/the-future-of-ecommerce",
+  "https://www.tiktok.com/@getnet_mx",
+  "https://www.youtube.com/@getnetmexico9426",
+  "https://www.youtube.com/@getnetworld",
+  "https://www.youtube.com/playlist?list=PLOQkRtq38B0jMMArq3eUorFMyXq2kYvX-",
+  "https://x.com/GetnetMx",
+  "https://youtu.be/62UA9I5oJg4",
+  "https://youtu.be/NJMCPLR4AQ8",
+  "https://youtu.be/rO-eQjus800",
+  "https://youtu.be/uZP0-GU0cHs",
+]
