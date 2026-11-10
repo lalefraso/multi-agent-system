@@ -27,19 +27,26 @@ class ChatSchemaTests(unittest.TestCase):
         with self.assertRaises(ValidationError):
             ChatRequest(message="Help", user_id="customer-123", debug=True)
 
-    def test_tool_schemas_share_query_and_user_id_contract(self):
-        for schema in (KnowledgeAgentInput, CustomerSupportAgentInput):
-            value = schema(query="Help with a payment", user_id="customer-123")
-            self.assertEqual(value.query, "Help with a payment")
+    def test_tools_accept_their_required_inputs(self):
+        knowledge = KnowledgeAgentInput(
+            query="Help with a payment", user_id="customer-123"
+        )
+        customer_support = CustomerSupportAgentInput(user_id="customer-123")
+        self.assertEqual(knowledge.query, "Help with a payment")
+        self.assertEqual(customer_support.user_id, "customer-123")
+        with self.assertRaises(ValidationError):
+            CustomerSupportAgentInput(
+                user_id="customer-123", query="Help with a payment"
+            )
 
     def test_response_has_request_id_and_explicit_status(self):
         response = ChatResponse(
-            status=AgentStatus.NOT_IMPLEMENTED,
-            answer="The knowledge agent has not been implemented yet.",
+            status=AgentStatus.COMPLETED,
+            answer="Customer data returned.",
         )
 
         self.assertIsNotNone(response.request_id)
-        self.assertEqual(response.status, AgentStatus.NOT_IMPLEMENTED)
+        self.assertEqual(response.status, AgentStatus.COMPLETED)
         self.assertEqual(response.agents_used, [])
 
 

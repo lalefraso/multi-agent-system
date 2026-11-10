@@ -13,7 +13,6 @@ class AgentName(StrEnum):
 
 class AgentStatus(StrEnum):
     COMPLETED = "completed"
-    NOT_IMPLEMENTED = "not_implemented"
 
 
 class ChatRequest(BaseModel):
@@ -48,8 +47,17 @@ class KnowledgeAgentInput(AgentToolInput):
     pass
 
 
-class CustomerSupportAgentInput(AgentToolInput):
-    pass
+class CustomerSupportAgentInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    user_id: str = Field(min_length=1, max_length=128)
+
+    @field_validator("user_id")
+    @classmethod
+    def reject_blank_user_id(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("must not be blank")
+        return value
 
 
 class VectorSearchInput(BaseModel):

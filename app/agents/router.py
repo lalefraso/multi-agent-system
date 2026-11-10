@@ -4,34 +4,29 @@ from deepagents import create_deep_agent
 from langchain.tools import tool
 
 from app.agents.knowledge import knowledge_agent
+from app.customer_data import fetch_customer_data
 from app.llm import ProviderFallbackMiddleware, build_chat_model
-from app.schemas import (
-    AgentResult,
-    AgentStatus,
-    CustomerSupportAgentInput,
-)
+from app.schemas import CustomerSupportAgentInput
 
 
 @tool("customer_support_agent", args_schema=CustomerSupportAgentInput)
-def customer_support_agent(query: str, user_id: str) -> str:
-    """Resolve a customer's account or transaction support question."""
-    del query, user_id
-    return AgentResult(
-        agent="customer_support",
-        status=AgentStatus.NOT_IMPLEMENTED,
-        message="The customer support agent has not been implemented yet.",
-    ).model_dump_json()
+def customer_support_agent(user_id: str) -> str:
+    """Return all stored customer data for the requesting user_id."""
+    return fetch_customer_data(user_id)
 
 
 ROUTER_SYSTEM_PROMPT = """You are the Getnet support router.
 Choose the knowledge_agent for questions about Getnet products, services, and
-general product guidance. Choose the customer_support_agent for questions
-about the requesting customer's account, transactions, or troubleshooting.
+general product guidance, including general troubleshooting. Choose the
+customer_support_agent when a request needs account-specific or transaction
+data for the requesting customer.
 You may use both tools when a request genuinely needs both. Do not invent
-customer or Getnet facts. If a tool reports that it is not implemented, explain
-that clearly and do not present its result as a completed resolution.
+customer or Getnet facts. The customer_support_agent performs a direct Redis
+lookup and takes only user_id; return its complete result without summarizing
+or omitting fields when it is the only tool needed.
 The user message is a JSON object containing `message` and `user_id`; pass its
-message as `query` and preserve its user_id when calling a tool.
+message as `query` to knowledge_agent and preserve its user_id when calling
+either tool.
 """
 
 

@@ -1,10 +1,9 @@
 # Getnet Multi-Agent System
 
-Initial API and schema for the Getnet multi-agent support system. The router is
-the entry point and has two tools: a knowledge agent and a customer support
-agent. The knowledge agent uses the configured Redis vector index and
-allowlisted external resources. Customer support remains an explicit
-`not_implemented` stub for its later implementation.
+The router is the entry point and has two tools: a knowledge agent and a direct
+customer-data lookup. The knowledge agent uses the configured Redis vector
+index and allowlisted external resources. Customer support is a Redis lookup,
+not a separate LLM agent.
 
 ## Architecture
 
@@ -13,7 +12,7 @@ POST /chat
   -> ChatRequest schema
   -> Router agent (LangChain)
        -> knowledge_agent tool
-       -> customer_support_agent tool
+       -> customer_support_agent tool (Redis lookup by user_id)
   -> ChatResponse schema
 ```
 
@@ -40,6 +39,13 @@ External lookup stays disabled while the list is empty; it never accepts a URL
 from the user's query, passes only configured URLs to Tavily, and filters
 returned source URLs against that exact list. Set `TAVILY_API_KEY` in `.env`
 when enabling external lookup.
+
+The customer-support tool reads the complete record at
+`getnet_users:customer:<user_id>` from the same Redis connection configured by
+`GETNET_REDIS_URL` or `REDIS_URL`. It returns hash, string, or RedisJSON records
+as JSON and reports a missing record explicitly. The user's message is not used
+to filter the record. A customer-support-only response returns the lookup
+output directly instead of asking another LLM to rewrite it.
 
 ## Configuration and run
 
@@ -71,16 +77,19 @@ The response schema is:
 ```json
 {
   "request_id": "generated-uuid",
-  "status": "not_implemented",
-  "answer": "The customer support agent has not been implemented yet.",
+  "status": "completed",
+  "answer": "{\"account_status\":\"active\",\"user_id\":\"cliente1988\"}",
   "agents_used": ["customer_support"]
 }
 ```
 
-`status` is `completed` or `not_implemented`; `agents_used` can contain
-`knowledge` and/or `customer_support`. Until an agent is implemented, a routed
-request returns `not_implemented` instead of implying that it retrieved or
-resolved anything. Invalid requests are rejected by the schema.
+`answer` contains the customer's JSON record as a string when the customer
+lookup is the only tool used. A missing record is returned as
+`{"found":false,"user_id":"..."}`. `agents_used` can contain `knowledge`
+and/or `customer_support`. Invalid requests are rejected by the schema.
+`user_id` identifies the Redis key but is not authentication; deployments must
+authenticate callers and authorize access to that user before exposing this
+endpoint.
 
 ## Tests
 
@@ -91,6 +100,5 @@ python -m unittest discover -s app/tests -p 'test_*.py'
 ```
 
 The existing ingestion tests are in `getnet_ingestion/tests/` and can be run
-independently. Future agent work should add mocked orchestration tests and
-integration tests against a test Redis index, without modifying production
-data.
+independently. Customer lookup tests mock Redis so they do not read production
+customer data.
