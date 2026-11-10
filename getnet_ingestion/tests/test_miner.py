@@ -5,6 +5,7 @@ from lxml import html
 from getnet_ingestion.miner import (
     _detect_language,
     _extract_sections,
+    _homepage_links,
     allowed_page_url,
     classify_url,
 )
@@ -19,6 +20,21 @@ class AllowedPageUrlTests(unittest.TestCase):
         self.assertEqual(
             allowed_page_url("https://www.getnet.net/en/"),
             "https://www.getnet.net/en",
+        )
+
+    def test_accepts_only_the_requested_locale(self):
+        self.assertEqual(
+            allowed_page_url(
+                "https://www.getnet.net/mx/recursos/blog/pagos",
+                locale="mx",
+            ),
+            "https://www.getnet.net/mx/recursos/blog/pagos",
+        )
+        self.assertIsNone(
+            allowed_page_url(
+                "https://www.getnet.net/en/resources/blog/payments",
+                locale="mx",
+            )
         )
 
     def test_rejects_external_languages_and_query_urls(self):
@@ -72,6 +88,26 @@ class SectionExtractionTests(unittest.TestCase):
         self.assertNotIn("Navigation text", " ".join(section["text"] for section in sections))
         self.assertNotIn("Footer text", " ".join(section["text"] for section in sections))
         self.assertEqual(sections[1]["category"], "solution")
+
+    def test_extracts_mexican_spanish_sections_with_spanish_metadata(self):
+        page = html.fromstring(
+            """
+            <html><head><title>Pagos en línea</title></head><body><main>
+              <h1>Soluciones de pago</h1>
+              <p>Administra los pagos de tu negocio desde una sola plataforma.</p>
+            </main></body></html>
+            """
+        )
+
+        sections = _extract_sections(
+            page,
+            "https://www.getnet.net/mx/nuestras-soluciones/pagos-en-linea",
+            "now",
+            "es",
+        )
+
+        self.assertEqual(sections[0]["language"], "es")
+        self.assertEqual(sections[0]["category"], "solution")
 
     def test_removes_duplicate_sections_and_article_recommendations(self):
         page = html.fromstring(
@@ -218,14 +254,41 @@ class SectionExtractionTests(unittest.TestCase):
     def test_uses_english_fallback_for_short_page_text(self):
         self.assertEqual(_detect_language([{"text": "Getnet payments"}]), "en")
 
+    def test_uses_locale_fallback_for_short_page_text(self):
+        self.assertEqual(_detect_language([{"text": "Pagos Getnet"}], "es"), "es")
+
     def test_classifies_articles_and_legal_content_separately(self):
         self.assertEqual(
             classify_url("https://www.getnet.net/en/resources/blog/payment-trends"),
             "article",
         )
         self.assertEqual(
+            classify_url("https://www.getnet.net/mx/recursos/blog/pagos"),
+            "article",
+        )
+        self.assertEqual(
             classify_url("https://www.getnet.net/en/legal/privacy-policy"),
             "legal",
+        )
+
+    def test_discovers_only_same_locale_homepage_links(self):
+        page = html.fromstring(
+            """
+            <main>
+              <a href="/mx/recursos/blog/article">Article</a>
+              <a href="https://www.getnet.net/mx/contacto">Contact</a>
+              <a href="https://www.getnet.net/en/contact">English</a>
+              <a href="https://example.com/other">External</a>
+            </main>
+            """
+        )
+
+        self.assertEqual(
+            _homepage_links(page, "https://www.getnet.net/mx", "mx"),
+            [
+                "https://www.getnet.net/mx/recursos/blog/article",
+                "https://www.getnet.net/mx/contacto",
+            ],
         )
 
 

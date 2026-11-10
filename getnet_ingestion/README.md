@@ -1,53 +1,44 @@
-# Getnet English content mining
+# Getnet content ingestion
 
-This step collects section-level text from pages listed in Getnet's English sitemap. It does not follow page links, so only sitemap entries on `www.getnet.net` whose path is `/en` or starts with `/en/` are requested. Redirects outside that scope are rejected, URLs disallowed by `robots.txt` stop the run, stale sitemap pages returning 404/410 are reported and skipped, and non-English page content is detected and excluded.
+The miner collects section-level text from Getnet's English (`/en`) or Mexico (`/mx`) sitemap. Requests and redirects are restricted to the selected locale on `www.getnet.net`; URLs disallowed by `robots.txt` stop the run. Stale sitemap pages returning 404/410 are reported and skipped, and content in the wrong language is excluded. For Mexico, the miner also discovers same-locale links on the homepage so current articles omitted from its sitemap are included.
 
-Each heading and its associated text is stored as one record; the miner does not split sections into chunks. The `section_heading` is a hierarchical path formed from the page title and the heading/subheading, for example `Agentic Commerce - From eCommerce to Agentic Commerce` or `Agentic Commerce - Our Agentic Commerce Suite - MCP AI Tool Kit`. Visually grouped carousel cards are also extracted as individual subsections under their section heading. The `text` field begins with that heading path, followed by the section body. Paragraphs, list items, and table rows remain separate semantic blocks in the extracted text. Articles, client stories, legal pages, and product/business pages receive separate category values. Language detection uses the combined text of each page, falling back to the English sitemap locale only when the page text is too short or ambiguous.
+Each heading and its associated text is stored as one record; the miner does not split sections into chunks. The `section_heading` is a hierarchical path formed from the page title and the heading/subheading. Visually grouped carousel cards are extracted as individual subsections. Paragraphs, list items, and table rows remain separate semantic blocks. Articles, client stories, legal pages, and product/business pages receive separate category values.
 
 ## Run
 
 From the repository root:
 
 ```bash
-python -m venv .venv
 .venv/bin/python -m pip install -r getnet_ingestion/requirements.txt
-.venv/bin/python -m getnet_ingestion.miner
+.venv/bin/python -m getnet_ingestion.miner --locale en
+.venv/bin/python -m getnet_ingestion.miner --locale mx
 ```
 
-The generated JSONL corpus is written to `getnet_ingestion/data/getnet_en_sections.jsonl` and is intentionally git-ignored because it is fetched source content. To choose another output path:
-
-```bash
-.venv/bin/python -m getnet_ingestion.miner --output /path/to/corpus.jsonl
-```
+The generated corpora are `getnet_ingestion/data/getnet_en_sections.jsonl` and `getnet_ingestion/data/getnet_mx_sections.jsonl`. They are git-ignored because they contain fetched source content. Use `--output` to choose another output path.
 
 The command fails explicitly if the sitemap, robots policy, page fetch, redirect, HTML type, extraction, or output write fails.
 
 ## Vectorize
 
-Use the open-source `BAAI/bge-small-en-v1.5` model to create normalized 384-dimensional vectors. Its 512-token input limit accommodates more complete subsections than `all-MiniLM-L6-v2` (256 tokens):
+Both locales use `intfloat/multilingual-e5-small` and normalized 384-dimensional vectors. Text is embedded with the model-required `passage: ` prefix while the stored source text remains unchanged. The model's input length is checked before encoding; long sections are separated at paragraph, list-item, or table-row boundaries preserved by the miner. An individual paragraph that remains too long is grouped at sentence boundaries. A sentence that still exceeds the model limit stops the run instead of being truncated.
 
 ```bash
-.venv/bin/python -m getnet_ingestion.embedder
+.venv/bin/python -m getnet_ingestion.embedder --locale en
+.venv/bin/python -m getnet_ingestion.embedder --locale mx
 ```
 
-The output is `getnet_ingestion/data/getnet_en_embeddings.jsonl`. Each JSONL row retains the source record and adds `embedding_model`, `embedding_dimensions`, and `embedding`. This generated file is git-ignored along with the source corpus.
-
-Before encoding, the command tokenizes every section without truncation and checks it against the model's actual maximum sequence length. If a section is too long, the vectorizer separates it only at the paragraph, list-item, or table-row boundaries preserved by the miner. Each resulting record retains the same semantic `section_heading`; no arbitrary token/sentence chunks or chunk-index metadata are added. If a single semantic block is still too long, vectorization stops and reports it rather than truncating or splitting that block. BGE is English-focused. For retrieval, use the same BGE model to embed queries and consider the model card's recommended query instruction. To choose another input or output:
-
-```bash
-.venv/bin/python -m getnet_ingestion.embedder \
-  --input getnet_ingestion/data/getnet_en_sections.jsonl \
-  --output getnet_ingestion/data/getnet_en_embeddings.jsonl
-```
+The resulting `getnet_<locale>_embeddings.jsonl` files are also git-ignored. Retrieval queries must use the same model with the `query: ` prefix.
 
 ## Persist in Redis
 
-The persistence command stores each embedding as a Redis hash and creates a Redis Search HNSW vector index using cosine distance. It requires Redis Stack or a Redis service with the Search/vector module enabled:
+Redis persistence stores each embedding as a hash under the shared `getnet:section:<id>` namespace and creates the `idx:getnet` Redis Search HNSW index using cosine distance. English and Mexico records remain distinguishable through their `language` field. It requires Redis Stack or a Redis service with the Search/vector module enabled.
 
 ```bash
-.venv/bin/python -m getnet_ingestion.redis_store
+.venv/bin/python -m getnet_ingestion.redis_store --locale all --recreate-index
 ```
 
-By default, the command reads `getnet_ingestion/data/getnet_en_embeddings.jsonl` and loads the Redis connection URL from `GETNET_REDIS_URL` or `REDIS_URL` in the repository-root `.env` file. Alternatively, pass `--redis-url`; this takes precedence over environment variables. There is no localhost fallback: the command stops with an explicit error if no URL is configured. Keep credentials in `.env`, which must not be committed. Each record is written under `getnet:en:section:<id>`; rerunning the command updates those hashes. The index name is `idx:getnet:en`.
+By default, the command reads both locale embeddings files and loads the Redis connection URL from `GETNET_REDIS_URL` or `REDIS_URL` in the repository-root `.env` file. Use `--locale en` or `--locale mx` to upsert only one corpus without recreating the shared index. Alternatively, pass `--redis-url`. There is no localhost fallback. Keep credentials in `.env`, which must not be committed.
 
-The command validates the model, vector dimension, finite vector values, and unique record IDs before writing. It does not delete Redis records absent from the current input file.
+`--recreate-index` requires both locale corpora, removes the previous `idx:getnet:en` and `idx:getnet:mx` indexes and their documents, then rebuilds the shared `idx:getnet` index with both corpora. Without it, records are upserted and old records absent from the input remain. Run mining and vectorization for both locales successfully before recreating the shared index.
+
+The store validates the embedding model, dimensions, finite vector values, and unique record IDs before writing.

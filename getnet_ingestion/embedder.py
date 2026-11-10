@@ -5,15 +5,17 @@ import hashlib
 import json
 import logging
 import math
+import re
 from pathlib import Path
 from typing import Any
 
 
-MODEL_NAME = "BAAI/bge-small-en-v1.5"
+MODEL_NAME = "intfloat/multilingual-e5-small"
 EMBEDDING_DIMENSIONS = 384
 DEFAULT_INPUT = Path(__file__).parent / "data" / "getnet_en_sections.jsonl"
 DEFAULT_OUTPUT = Path(__file__).parent / "data" / "getnet_en_embeddings.jsonl"
 BATCH_SIZE = 32
+PASSAGE_PREFIX = "passage: "
 
 LOGGER = logging.getLogger(__name__)
 
@@ -75,6 +77,59 @@ def _token_count(model: Any, text: str) -> int:
     return len(input_ids)
 
 
+def _passage_text(text: str) -> str:
+    return f"{PASSAGE_PREFIX}{text}"
+
+
+def _fit_semantic_blocks(
+    heading: str,
+    blocks: list[str],
+    model: Any,
+    max_tokens: int,
+    record_label: str,
+) -> list[str]:
+    fitted: list[str] = []
+    for block in blocks:
+        block_text = f"{heading}\n{block}"
+        if _token_count(model, _passage_text(block_text)) <= max_tokens:
+            fitted.append(block_text)
+            continue
+
+        sentences = re.split(r"(?<=[.!?])\s+", block.strip())
+        if len(sentences) < 2:
+            token_count = _token_count(model, _passage_text(block_text))
+            raise EmbeddingError(
+                f"Semantic block in {record_label!r} exceeds the model limit of "
+                f"{max_tokens} tokens ({token_count}). It was not divided or truncated."
+            )
+
+        sentence_group: list[str] = []
+        for sentence in sentences:
+            candidate = " ".join((*sentence_group, sentence))
+            candidate_text = f"{heading}\n{candidate}"
+            if _token_count(model, _passage_text(candidate_text)) <= max_tokens:
+                sentence_group.append(sentence)
+                continue
+            if not sentence_group:
+                token_count = _token_count(model, _passage_text(candidate_text))
+                raise EmbeddingError(
+                    f"Sentence in {record_label!r} exceeds the model limit of "
+                    f"{max_tokens} tokens ({token_count}). It was not divided or truncated."
+                )
+            fitted.append(f"{heading}\n{' '.join(sentence_group)}")
+            sentence_group = [sentence]
+            single_sentence_text = f"{heading}\n{sentence}"
+            token_count = _token_count(model, _passage_text(single_sentence_text))
+            if token_count > max_tokens:
+                raise EmbeddingError(
+                    f"Sentence in {record_label!r} exceeds the model limit of "
+                    f"{max_tokens} tokens ({token_count}). It was not divided or truncated."
+                )
+        if sentence_group:
+            fitted.append(f"{heading}\n{' '.join(sentence_group)}")
+    return fitted
+
+
 def _separate_semantic_blocks(
     records: list[dict[str, Any]],
     model: Any,
@@ -85,33 +140,28 @@ def _separate_semantic_blocks(
 
     for record in records:
         text = record["text"]
-        if _token_count(model, text) <= max_tokens:
+        if _token_count(model, _passage_text(text)) <= max_tokens:
             result.append(record)
             continue
 
         lines = text.splitlines()
-        if len(lines) < 3:
+        if len(lines) < 2:
             result.append(record)
             continue
 
         heading = lines[0]
         blocks = [line.strip() for line in lines[1:] if line.strip()]
-        if len(blocks) < 2:
-            result.append(record)
-            continue
-
+        fitted_blocks = _fit_semantic_blocks(
+            heading,
+            blocks,
+            model,
+            max_tokens,
+            record.get("section_heading", record["id"]),
+        )
         block_records = []
-        for block in blocks:
-            block_text = f"{heading}\n{block}"
-            token_count = _token_count(model, block_text)
-            if token_count > max_tokens:
-                raise EmbeddingError(
-                    f"Semantic block in {record.get('section_heading', record['id'])!r} "
-                    f"exceeds the model limit of {max_tokens} tokens ({token_count}). "
-                    "It was not divided or truncated."
-                )
+        for block_index, block_text in enumerate(fitted_blocks):
             block_id = hashlib.sha256(
-                f"{record['id']}\n{block}".encode("utf-8")
+                f"{record['id']}\n{block_index}\n{block_text}".encode("utf-8")
             ).hexdigest()
             block_records.append({**record, "id": block_id, "text": block_text})
 
@@ -138,11 +188,11 @@ def vectorize_records(
         raise EmbeddingError(f"Invalid model max sequence length: {max_tokens!r}")
 
     records_to_embed = _separate_semantic_blocks(records, model, max_tokens)
-    oversized = [
-        (record, _token_count(model, record["text"]))
-        for record in records_to_embed
-        if _token_count(model, record["text"]) > max_tokens
-    ]
+    oversized = []
+    for record in records_to_embed:
+        token_count = _token_count(model, _passage_text(record["text"]))
+        if token_count > max_tokens:
+            oversized.append((record, token_count))
     if oversized:
         details = "; ".join(
             f"{record.get('section_heading', 'Unlabeled section')!r} "
@@ -158,7 +208,7 @@ def vectorize_records(
         )
 
     vectors = model.encode(
-        [record["text"] for record in records_to_embed],
+        [_passage_text(record["text"]) for record in records_to_embed],
         batch_size=BATCH_SIZE,
         convert_to_numpy=True,
         normalize_embeddings=True,
@@ -226,15 +276,23 @@ def vectorize(
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Create whole-section embeddings for the Getnet English corpus."
+        description="Create whole-section embeddings for a Getnet locale corpus."
     )
-    parser.add_argument("--input", type=Path, default=DEFAULT_INPUT, help="Input corpus JSONL")
-    parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT, help="Output embeddings JSONL")
+    parser.add_argument(
+        "--locale",
+        choices=("en", "mx"),
+        default="en",
+        help="Corpus locale (default: en)",
+    )
+    parser.add_argument("--input", type=Path, default=None, help="Input corpus JSONL")
+    parser.add_argument("--output", type=Path, default=None, help="Output embeddings JSONL")
     parser.add_argument("--model", default=MODEL_NAME, help="Sentence Transformers model name")
     args = parser.parse_args()
+    input_path = args.input or Path(__file__).parent / "data" / f"getnet_{args.locale}_sections.jsonl"
+    output_path = args.output or Path(__file__).parent / "data" / f"getnet_{args.locale}_embeddings.jsonl"
     logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
     try:
-        vectorize(args.input, args.output, args.model)
+        vectorize(input_path, output_path, args.model)
     except EmbeddingError as exc:
         parser.exit(1, f"Vectorization failed: {exc}\n")
 

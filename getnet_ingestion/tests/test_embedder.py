@@ -6,6 +6,8 @@ from pathlib import Path
 from getnet_ingestion.embedder import (
     EMBEDDING_DIMENSIONS,
     EmbeddingError,
+    MODEL_NAME,
+    PASSAGE_PREFIX,
     load_records,
     vectorize_records,
     write_records,
@@ -50,7 +52,8 @@ class VectorizeRecordsTests(unittest.TestCase):
         self.assertEqual(result[0]["embedding_model"], "test-model")
         self.assertEqual(result[0]["embedding_dimensions"], EMBEDDING_DIMENSIONS)
         self.assertEqual(len(result[0]["embedding"]), EMBEDDING_DIMENSIONS)
-        self.assertEqual(model.encoded_texts, [record["text"]])
+        self.assertEqual(model.encoded_texts, [f"{PASSAGE_PREFIX}{record['text']}"])
+        self.assertEqual(MODEL_NAME, "intfloat/multilingual-e5-small")
         self.assertFalse(model.tokenizer.truncation)
 
     def test_separates_oversized_sections_at_semantic_block_boundaries(self):
@@ -74,10 +77,33 @@ class VectorizeRecordsTests(unittest.TestCase):
             [record["section_heading"]] * 3,
         )
         self.assertEqual(len({item["id"] for item in result}), 3)
+        self.assertTrue(all(text.startswith(PASSAGE_PREFIX) for text in model.encoded_texts))
         self.assertTrue(
             all(not {"parent_id", "chunk_index", "chunk_count"}.intersection(item) for item in result)
         )
         self.assertEqual(len(model.encoded_texts), 3)
+
+    def test_splits_oversized_paragraphs_at_sentence_boundaries_without_loss(self):
+        model = FakeModel()
+        model.max_seq_length = 14
+        sentences = (
+            "First sentence has four words.",
+            "Second sentence has five words.",
+            "Third sentence has five words.",
+        )
+        record = {
+            "id": "long-paragraph",
+            "section_heading": "Title - Section",
+            "text": f"Title - Section\n{' '.join(sentences)}",
+        }
+
+        result = vectorize_records([record], model)
+
+        self.assertGreater(len(result), 1)
+        combined_text = " ".join(item["text"] for item in result)
+        for sentence in sentences:
+            self.assertEqual(combined_text.count(sentence), 1)
+        self.assertTrue(all(text.startswith(PASSAGE_PREFIX) for text in model.encoded_texts))
 
     def test_does_not_split_a_single_oversized_semantic_block(self):
         model = FakeModel()
@@ -87,7 +113,7 @@ class VectorizeRecordsTests(unittest.TestCase):
             "text": "Title - Section\nThis single paragraph is too long.",
         }
 
-        with self.assertRaisesRegex(EmbeddingError, "No text was truncated"):
+        with self.assertRaisesRegex(EmbeddingError, "not divided or truncated"):
             vectorize_records([record], model)
 
         self.assertIsNone(model.encoded_texts)

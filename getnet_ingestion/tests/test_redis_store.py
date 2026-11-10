@@ -6,10 +6,15 @@ from redis.exceptions import ResponseError
 
 from getnet_ingestion.embedder import EMBEDDING_DIMENSIONS, MODEL_NAME
 from getnet_ingestion.redis_store import (
+    DEFAULT_INDEX,
+    DEFAULT_PREFIX,
+    LEGACY_INDEXES,
     RedisStoreError,
     _resolve_redis_url,
+    embeddings_for_locale,
     load_embedding_records,
     persist_records,
+    persist_corpora,
 )
 
 
@@ -43,6 +48,10 @@ class FakeIndex:
         self.created_schema = (schema, definition)
         self.exists = True
 
+    def dropindex(self, *, delete_documents):
+        self.dropped_documents = delete_documents
+        self.exists = False
+
 
 class FakePipeline:
     def __init__(self):
@@ -61,11 +70,14 @@ class FakePipeline:
 class FakeRedis:
     def __init__(self):
         self.index = FakeIndex()
+        self.indexes = {DEFAULT_INDEX: self.index}
         self.pipeline_instance = FakePipeline()
 
     def ft(self, index_name):
         self.index_name = index_name
-        return self.index
+        if index_name not in self.indexes:
+            self.indexes[index_name] = FakeIndex()
+        return self.indexes[index_name]
 
     def pipeline(self, *, transaction):
         self.transaction = transaction
@@ -99,12 +111,13 @@ class RedisStoreTests(unittest.TestCase):
         count = persist_records([embedding_record()], client)
 
         self.assertEqual(count, 1)
-        self.assertEqual(client.index_name, "idx:getnet:en")
+        self.assertEqual(client.index_name, DEFAULT_INDEX)
+        self.assertEqual(DEFAULT_PREFIX, "getnet:section:")
         self.assertIsNotNone(client.index.created_schema)
         self.assertFalse(client.transaction)
         self.assertEqual(client.pipeline_instance.executions, 1)
         key, stored = client.pipeline_instance.records[0]
-        self.assertEqual(key, "getnet:en:section:section-1")
+        self.assertEqual(key, "getnet:section:section-1")
         self.assertEqual(stored["id"], "section-1")
         self.assertEqual(stored["text"], "Example - Payments\nAccept payments.")
         self.assertEqual(
@@ -123,10 +136,62 @@ class RedisStoreTests(unittest.TestCase):
     def test_creates_index_when_server_reports_search_index_not_found(self):
         client = FakeRedis()
         client.index = FakeIndex(missing_error="SEARCH_INDEX_NOT_FOUND Index not found")
+        client.indexes[DEFAULT_INDEX] = client.index
 
         persist_records([embedding_record()], client)
 
         self.assertIsNotNone(client.index.created_schema)
+
+    def test_persists_mexico_document_into_shared_namespace(self):
+        client = FakeRedis()
+        record = embedding_record()
+        record["id"] = "section-mx"
+        record["url"] = "https://www.getnet.net/mx/example"
+        record["language"] = "es"
+
+        persist_records([record], client)
+
+        self.assertEqual(client.index_name, DEFAULT_INDEX)
+        self.assertEqual(
+            client.pipeline_instance.records[0][0],
+            "getnet:section:section-mx",
+        )
+        self.assertEqual(client.pipeline_instance.records[0][1]["language"], "es")
+
+    def test_recreates_index_and_deletes_its_old_documents(self):
+        client = FakeRedis()
+        client.index = FakeIndex(exists=True)
+        client.indexes[DEFAULT_INDEX] = client.index
+        for legacy_index in LEGACY_INDEXES:
+            client.indexes[legacy_index] = FakeIndex(exists=True)
+
+        record_mx = embedding_record("section-mx")
+        record_mx["language"] = "es"
+        persist_records(
+            [embedding_record(), record_mx],
+            client,
+            recreate_index=True,
+        )
+
+        self.assertTrue(client.index.dropped_documents)
+        self.assertIsNotNone(client.index.created_schema)
+        self.assertTrue(
+            all(client.indexes[index].dropped_documents for index in LEGACY_INDEXES)
+        )
+        self.assertEqual(len(client.pipeline_instance.records), 2)
+
+    def test_locale_helpers_select_matching_embedding_files(self):
+        self.assertTrue(
+            str(embeddings_for_locale("mx")).endswith("getnet_mx_embeddings.jsonl")
+        )
+
+    def test_recreate_shared_index_requires_both_locale_corpora(self):
+        with self.assertRaisesRegex(RedisStoreError, "all locale corpora"):
+            persist_corpora(
+                (embeddings_for_locale("en"),),
+                index_name=DEFAULT_INDEX,
+                recreate_index=True,
+            )
 
     def test_rejects_duplicate_ids_before_writing(self):
         client = FakeRedis()
