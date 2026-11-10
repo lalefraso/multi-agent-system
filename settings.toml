@@ -1,7 +1,7 @@
 [llm]
 model = "openai:gpt-6-luna"
 fallback_models = [
-  "claude-fable-5-2",
+  "anthropic:claude-sonnet-4-6",
   "baseten:moonshotai/Kimi-K2.6",
 ]
 thinking_level = "medium"

@@ -63,10 +63,12 @@ starting a conversation without memory.
 
 Create `.env` from [`.env.example`](./.env.example), then set the API key for
 the selected primary provider, the Anthropic fallback, and LangSmith. Baseten
-is initialized only if the primary and Claude fallback fail; at that point its
-API key, deployed endpoint's `BASETEN_BASE_URL`, and `BASETEN_MODEL` must be
-configured. Edit `settings.toml` to choose another primary model or fallback
-chain. The `thinking_level` setting is passed through for Google GenAI models.
+is initialized only if the primary and Anthropic fallback fail; at that point
+its API key and deployed endpoint's `BASETEN_BASE_URL` must be configured. Its
+model is taken from the `baseten:<model>` fallback identifier in `settings.toml`
+unless overridden by `BASETEN_MODEL`. Edit `settings.toml` to choose another
+primary model or fallback chain. The `thinking_level` setting is passed through
+for Google GenAI models.
 
 Install dependencies and run the API from the repository root:
 

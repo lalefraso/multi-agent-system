@@ -149,6 +149,53 @@ class ProviderFallbackTests(unittest.TestCase):
         )
 
     @patch("app.llm.init_chat_model")
+    def test_resolves_provider_model_baseten_fallback(self, init_model):
+        with patch.dict(
+            "os.environ",
+            {
+                "BASETEN_API_KEY": "test-key",
+                "BASETEN_BASE_URL": "https://example.baseten.co/v1",
+            },
+            clear=True,
+        ):
+            _create_chat_model("baseten:moonshotai/Kimi-K2.6")
+
+        init_model.assert_called_once_with(
+            model="openai:moonshotai/Kimi-K2.6",
+            base_url="https://example.baseten.co/v1",
+            api_key="test-key",
+            timeout=30,
+            max_retries=1,
+        )
+
+    @patch("app.llm._create_chat_model")
+    def test_configured_fallbacks_use_supported_model_identifiers(
+        self, create_chat_model
+    ):
+        create_chat_model.return_value = object()
+
+        _, _, fallbacks = build_chat_model()
+
+        self.assertEqual(
+            [model_name for model_name, _ in fallbacks],
+            [
+                "anthropic:claude-sonnet-4-6",
+                "baseten:moonshotai/Kimi-K2.6",
+            ],
+        )
+        for _, create_fallback in fallbacks:
+            create_fallback()
+
+        self.assertEqual(
+            [call_args.args[0] for call_args in create_chat_model.call_args_list],
+            [
+                "openai:gpt-6-luna",
+                "anthropic:claude-sonnet-4-6",
+                "baseten:moonshotai/Kimi-K2.6",
+            ],
+        )
+
+    @patch("app.llm.init_chat_model")
     def test_passes_thinking_level_for_google_genai(self, init_model):
         _create_chat_model("google_genai:gemini-3.6-flash", "medium")
 

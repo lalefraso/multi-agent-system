@@ -52,15 +52,19 @@ def load_llm_settings() -> dict[str, Any]:
 
 
 def _create_chat_model(model_id: str, thinking_level: str | None = None) -> Any:
-    if model_id == "baseten":
-        required = ("BASETEN_API_KEY", "BASETEN_BASE_URL", "BASETEN_MODEL")
+    if model_id == "baseten" or model_id.startswith("baseten:"):
+        configured_model = model_id.partition(":")[2]
+        model_name = os.getenv("BASETEN_MODEL") or configured_model
+        required = ("BASETEN_API_KEY", "BASETEN_BASE_URL")
         missing = [name for name in required if not os.getenv(name)]
+        if not model_name:
+            missing.append("BASETEN_MODEL or baseten:<model>")
         if missing:
             raise LLMConfigurationError(
                 "Missing required Baseten configuration: " + ", ".join(missing)
             )
         return init_chat_model(
-            model=f"openai:{os.environ['BASETEN_MODEL']}",
+            model=f"openai:{model_name}",
             base_url=os.environ["BASETEN_BASE_URL"],
             api_key=os.environ["BASETEN_API_KEY"],
             timeout=30,
