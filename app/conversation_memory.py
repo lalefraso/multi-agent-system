@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 import hashlib
+import json
 from uuid import UUID
 
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
-from langchain_redis import RedisChatMessageHistory
 from redis import Redis
 from redis.exceptions import RedisError
 
@@ -14,7 +14,6 @@ from getnet_ingestion.redis_store import RedisStoreError, _resolve_redis_url
 CONVERSATION_TTL_SECONDS = 30 * 24 * 60 * 60
 MAX_CONTEXT_MESSAGES = 20
 HISTORY_KEY_PREFIX = "getnet:chat:"
-HISTORY_INDEX_NAME = "idx:getnet:agent_chat_history"
 
 
 class ConversationMemoryError(RuntimeError):
@@ -34,13 +33,11 @@ class ConversationHistory:
             raise ConversationMemoryError(str(exc)) from exc
 
         try:
-            self._client = Redis.from_url(redis_url)
-            self._history = RedisChatMessageHistory(
-                session_id=_session_id(user_id, conversation_id),
-                redis_client=self._client,
-                key_prefix=HISTORY_KEY_PREFIX,
-                index_name=HISTORY_INDEX_NAME,
-                ttl=CONVERSATION_TTL_SECONDS,
+            self._client = Redis.from_url(
+                redis_url, decode_responses=True
+            )
+            self._key = (
+                f"{HISTORY_KEY_PREFIX}{_session_id(user_id, conversation_id)}"
             )
         except (RedisError, ValueError) as exc:
             client = getattr(self, "_client", None)
@@ -57,20 +54,39 @@ class ConversationHistory:
 
     def load_context(self) -> list[BaseMessage]:
         try:
-            return self._history.messages[-MAX_CONTEXT_MESSAGES:]
+            records = self._client.lrange(self._key, -MAX_CONTEXT_MESSAGES, -1)
         except RedisError as exc:
             raise ConversationMemoryError(
                 "Could not retrieve Redis conversation history"
             ) from exc
+        messages: list[BaseMessage] = []
+        try:
+            for record in records:
+                item = json.loads(record)
+                if not isinstance(item, dict) or not isinstance(
+                    item.get("content"), str
+                ):
+                    raise ValueError("Invalid conversation message")
+                if item.get("type") == "human":
+                    messages.append(HumanMessage(content=item["content"]))
+                elif item.get("type") == "ai":
+                    messages.append(AIMessage(content=item["content"]))
+                else:
+                    raise ValueError("Unsupported conversation message type")
+        except (json.JSONDecodeError, ValueError) as exc:
+            raise ConversationMemoryError(
+                "Could not decode Redis conversation history"
+            ) from exc
+        return messages
 
     def save_turn(self, user_message: str, answer: str) -> None:
         try:
-            self._history.add_messages(
-                [
-                    HumanMessage(content=user_message),
-                    AIMessage(content=answer),
-                ]
+            self._client.rpush(
+                self._key,
+                json.dumps({"type": "human", "content": user_message}),
+                json.dumps({"type": "ai", "content": answer}),
             )
+            self._client.expire(self._key, CONVERSATION_TTL_SECONDS)
         except RedisError as exc:
             raise ConversationMemoryError(
                 "Could not store Redis conversation history"

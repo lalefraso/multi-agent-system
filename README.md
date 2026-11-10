@@ -20,10 +20,11 @@ POST /chat
 
 The router is built with LangChain's `init_chat_model` and Deep Agents'
 `create_deep_agent`. Its model and ordered fallback chain are configured in
-[`settings.toml`](./settings.toml). The default is OpenAI, followed by Claude,
-then the OpenAI-compatible Baseten endpoint. Change `llm.model` there to select
-another provider/model identifier, such as `openai:gpt-5.5`. LangSmith tracing
-is enabled when `LANGSMITH_API_KEY` is configured. The existing ingestion
+[`settings.toml`](./settings.toml). The default is Baseten's
+`deepseek-ai/DeepSeek-V4.1-Flash`,
+followed by OpenAI and Anthropic. Change `llm.model` there to select another
+provider/model identifier, such as `openai:gpt-5.5`. LangSmith tracing is enabled
+when `LANGSMITH_API_KEY` is configured. The existing ingestion
 pipeline and Redis vector index are in [`getnet_ingestion/`](./getnet_ingestion/);
 this skeleton does not change or recreate that database.
 
@@ -36,6 +37,10 @@ log prompt or response contents.
 The knowledge agent has its own two-tool boundary: `vector_search` queries the
 existing `idx:getnet` index with the same multilingual E5 model and `query: `
 prefix used by ingestion, and `external_resource_search` uses Tavily Extract.
+Knowledge answers are concise and grounded only in retrieved sources. Similar
+product names are treated as candidates, not assumed aliases; comparisons
+search for each product and report when the sources do not establish a
+difference.
 Add exact HTTPS page URLs to `[knowledge].allowed_urls` in `settings.toml`.
 External lookup stays disabled while the list is empty; it never accepts a URL
 from the user's query, passes only configured URLs to Tavily, and filters
@@ -49,26 +54,46 @@ as JSON and reports a missing record explicitly. The user's message is not used
 to filter the record. A customer-support-only response returns the lookup
 output directly instead of asking another LLM to rewrite it.
 
-Conversation memory uses `langchain-redis` `RedisChatMessageHistory` on that
-same Redis deployment. Each conversation is scoped to both `user_id` and a
-`conversation_id`; when omitted, the API generates one and returns it in the
-response. Clients should send that ID with later turns to continue the same
-conversation. Redis expires individual messages after 30 days, and only the
-most recent 20 messages are included in the agent context. This history store
-uses Redis JSON and Redis Search, so the Redis deployment must provide those
-modules. History read/write failures return HTTP 503 rather than silently
-starting a conversation without memory.
+Conversation memory uses Redis lists on the same deployment. Each conversation
+is scoped to both `user_id` and a `conversation_id`; when omitted, the API
+generates one and returns it in the response. Clients should send that ID with
+later turns to continue the same conversation. Redis expires each conversation
+after 30 days, and only the most recent 20 messages are included in agent
+context. Redis Search is required for vector knowledge lookup; RedisJSON is
+required if customer records are stored as RedisJSON. History read/write
+failures return HTTP 503 rather than silently starting a conversation without
+memory.
 
 ## Configuration and run
 
 Create `.env` from [`.env.example`](./.env.example), then set the API key for
-the selected primary provider, the Anthropic fallback, and LangSmith. Baseten
-is initialized only if the primary and Anthropic fallback fail; at that point
-its API key and deployed endpoint's `BASETEN_BASE_URL` must be configured. Its
-model is taken from the `baseten:<model>` fallback identifier in `settings.toml`
-unless overridden by `BASETEN_MODEL`. Edit `settings.toml` to choose another
-primary model or fallback chain. The `thinking_level` setting is passed through
-for Google GenAI models.
+the selected primary provider and any fallbacks you want available. Baseten
+requires its API key and deployed endpoint's `BASETEN_BASE_URL`; its model is
+taken from the `baseten:<model>` identifier in `settings.toml` unless
+overridden by `BASETEN_MODEL`. Edit `settings.toml` to choose another primary
+model or fallback chain. The `thinking_level` setting is passed through for
+Google GenAI models.
+
+### Run with Docker
+
+Install Docker Desktop, copy `.env.example` to `.env`, and set the API key for
+your selected LLM provider. Then build and start the API with Redis Stack, which
+provides Redis Search for knowledge lookup and RedisJSON for JSON customer
+records:
+
+```bash
+docker compose up --build
+```
+
+The API is available at `http://localhost:8000`; its `/health` endpoint can
+confirm startup. Redis data is stored in the `redis-data` volume and survives
+container restarts. Stop the services with `docker compose down`. To also erase
+the local Redis history and data, run `docker compose down --volumes`.
+LangSmith tracing is disabled by default for this local stack; set
+`LANGSMITH_TRACING=true` in `.env` to opt in.
+
+Continue with the two `/chat` requests below to check that the second request
+recalls the phrase from the first.
 
 Install dependencies and run the API from the repository root:
 
@@ -89,6 +114,27 @@ The service provides `GET /health` and `POST /chat`. Example request:
 
 Omit `conversation_id` on the first turn; use the ID returned by the API to
 continue that conversation.
+
+To test memory across two requests, start the API with a configured LLM and a
+Redis deployment that supports Redis JSON and Redis Search. Send a first turn:
+
+```bash
+curl -sS http://localhost:8000/chat \
+  -H 'Content-Type: application/json' \
+  -d '{"message":"Remember this test phrase: cobalt otter 47.","user_id":"memory-test-user"}'
+```
+
+Copy the returned `conversation_id` into the next request, keeping the same
+`user_id`:
+
+```bash
+curl -sS http://localhost:8000/chat \
+  -H 'Content-Type: application/json' \
+  -d '{"message":"What test phrase did I ask you to remember?","user_id":"memory-test-user","conversation_id":"PASTE-CONVERSATION-ID-HERE"}'
+```
+
+The second answer should recall `cobalt otter 47`. If you omit the conversation
+ID or change the user ID, the request uses a different history.
 
 The response schema is:
 

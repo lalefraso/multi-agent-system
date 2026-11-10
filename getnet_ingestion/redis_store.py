@@ -12,8 +12,14 @@ from typing import Any
 from dotenv import load_dotenv
 from redis import Redis
 from redis.commands.search.field import TagField, TextField, VectorField
-from redis.commands.search.indexDefinition import IndexDefinition, IndexType
 from redis.exceptions import RedisError, ResponseError
+
+try:
+    from redis.commands.search.index_definition import IndexDefinition, IndexType
+except ModuleNotFoundError as exc:
+    if exc.name != "redis.commands.search.index_definition":
+        raise
+    from redis.commands.search.indexDefinition import IndexDefinition, IndexType
 
 from getnet_ingestion.embedder import EMBEDDING_DIMENSIONS, MODEL_NAME
 

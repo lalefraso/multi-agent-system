@@ -7,7 +7,6 @@ from redis.exceptions import RedisError
 
 from app.conversation_memory import (
     CONVERSATION_TTL_SECONDS,
-    HISTORY_INDEX_NAME,
     HISTORY_KEY_PREFIX,
     MAX_CONTEXT_MESSAGES,
     ConversationHistory,
@@ -17,72 +16,78 @@ from app.conversation_memory import (
 
 
 class ConversationHistoryTests(unittest.TestCase):
-    @patch("app.conversation_memory.RedisChatMessageHistory")
     @patch("app.conversation_memory.Redis.from_url")
     @patch(
         "app.conversation_memory._resolve_redis_url",
         return_value="redis://test",
     )
     def test_configures_scoped_history_with_ttl(
-        self, _resolve_url, redis_from_url, history_factory
+        self, _resolve_url, redis_from_url
     ):
         conversation_id = UUID("9015dbdd-608a-443e-8ddb-a142817ad9df")
         history = ConversationHistory("user-1", conversation_id)
 
-        redis_from_url.assert_called_once_with("redis://test")
-        history_factory.assert_called_once()
-        options = history_factory.call_args.kwargs
-        self.assertEqual(options["redis_client"], redis_from_url.return_value)
-        self.assertEqual(options["key_prefix"], HISTORY_KEY_PREFIX)
-        self.assertEqual(options["index_name"], HISTORY_INDEX_NAME)
-        self.assertEqual(options["ttl"], CONVERSATION_TTL_SECONDS)
-        self.assertEqual(len(options["session_id"]), 64)
+        redis_from_url.assert_called_once_with(
+            "redis://test", decode_responses=True
+        )
+        self.assertEqual(
+            history._key,
+            f"{HISTORY_KEY_PREFIX}{_session_id('user-1', conversation_id)}",
+        )
         self.assertNotEqual(
-            options["session_id"],
-            _session_id(
-                "another-user", UUID("9015dbdd-608a-443e-8ddb-a142817ad9df")
-            ),
+            history._key,
+            f"{HISTORY_KEY_PREFIX}{_session_id('another-user', conversation_id)}",
         )
         history.close()
         redis_from_url.return_value.close.assert_called_once_with()
 
-    @patch("app.conversation_memory.RedisChatMessageHistory")
     @patch("app.conversation_memory.Redis.from_url")
     @patch(
         "app.conversation_memory._resolve_redis_url",
         return_value="redis://test",
     )
     def test_limits_loaded_context_and_saves_user_and_assistant_turn(
-        self, _resolve_url, _redis_from_url, history_factory
+        self, _resolve_url, redis_from_url
     ):
-        messages = [HumanMessage(content=f"message-{i}") for i in range(25)]
-        history_factory.return_value.messages = messages
+        client = redis_from_url.return_value
+        client.lrange.return_value = [
+            f'{{"type":"human","content":"message-{i}"}}'
+            for i in range(25 - MAX_CONTEXT_MESSAGES, 25)
+        ]
         history = ConversationHistory(
             "user-1", UUID("9015dbdd-608a-443e-8ddb-a142817ad9df")
         )
 
         self.assertEqual(
-            history.load_context(), messages[-MAX_CONTEXT_MESSAGES:]
+            history.load_context(),
+            [
+                HumanMessage(content=f"message-{i}")
+                for i in range(25 - MAX_CONTEXT_MESSAGES, 25)
+            ],
+        )
+        client.lrange.assert_called_once_with(
+            history._key, -MAX_CONTEXT_MESSAGES, -1
         )
         history.save_turn("new question", "new answer")
-        history_factory.return_value.add_messages.assert_called_once_with(
-            [
-                HumanMessage(content="new question"),
-                AIMessage(content="new answer"),
-            ]
+        client.rpush.assert_called_once_with(
+            history._key,
+            '{"type": "human", "content": "new question"}',
+            '{"type": "ai", "content": "new answer"}',
+        )
+        client.expire.assert_called_once_with(
+            history._key, CONVERSATION_TTL_SECONDS
         )
         history.close()
 
-    @patch("app.conversation_memory.RedisChatMessageHistory")
     @patch("app.conversation_memory.Redis.from_url")
     @patch(
         "app.conversation_memory._resolve_redis_url",
         return_value="redis://test",
     )
-    def test_redis_errors_are_reported_and_client_is_closed(
-        self, _resolve_url, redis_from_url, history_factory
+    def test_redis_connection_errors_are_reported(
+        self, _resolve_url, redis_from_url
     ):
-        history_factory.side_effect = RedisError("connection failed")
+        redis_from_url.side_effect = RedisError("connection failed")
 
         with self.assertRaisesRegex(
             ConversationMemoryError, "Could not configure Redis"
@@ -91,7 +96,23 @@ class ConversationHistoryTests(unittest.TestCase):
                 "user-1", UUID("9015dbdd-608a-443e-8ddb-a142817ad9df")
             )
 
-        redis_from_url.return_value.close.assert_called_once_with()
+    @patch("app.conversation_memory.Redis.from_url")
+    @patch(
+        "app.conversation_memory._resolve_redis_url",
+        return_value="redis://test",
+    )
+    def test_corrupt_history_is_reported(self, _resolve_url, redis_from_url):
+        redis_from_url.return_value.lrange.return_value = ["not-json"]
+        history = ConversationHistory(
+            "user-1", UUID("9015dbdd-608a-443e-8ddb-a142817ad9df")
+        )
+
+        with self.assertRaisesRegex(
+            ConversationMemoryError, "Could not decode"
+        ):
+            history.load_context()
+
+        history.close()
 
 
 if __name__ == "__main__":

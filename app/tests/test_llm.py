@@ -174,13 +174,15 @@ class ProviderFallbackTests(unittest.TestCase):
     ):
         create_chat_model.return_value = object()
 
-        _, _, fallbacks = build_chat_model()
+        primary, model_name, fallbacks = build_chat_model()
 
+        self.assertIsNotNone(primary)
+        self.assertEqual(model_name, "baseten:deepseek-ai/DeepSeek-V4.1-Flash")
         self.assertEqual(
             [model_name for model_name, _ in fallbacks],
             [
+                "openai:gpt-6-luna",
                 "anthropic:claude-sonnet-4-6",
-                "baseten:moonshotai/Kimi-K2.6",
             ],
         )
         for _, create_fallback in fallbacks:
@@ -189,9 +191,9 @@ class ProviderFallbackTests(unittest.TestCase):
         self.assertEqual(
             [call_args.args[0] for call_args in create_chat_model.call_args_list],
             [
+                "baseten:deepseek-ai/DeepSeek-V4.1-Flash",
                 "openai:gpt-6-luna",
                 "anthropic:claude-sonnet-4-6",
-                "baseten:moonshotai/Kimi-K2.6",
             ],
         )
 

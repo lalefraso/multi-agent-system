@@ -1,8 +1,8 @@
 [llm]
-model = "openai:gpt-6-luna"
+model = "baseten:deepseek-ai/DeepSeek-V4.1-Flash"
 fallback_models = [
+  "openai:gpt-6-luna",
   "anthropic:claude-sonnet-4-6",
-  "baseten:moonshotai/Kimi-K2.6",
 ]
 thinking_level = "medium"
 
