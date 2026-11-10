@@ -39,3 +39,15 @@ Before encoding, the command tokenizes every section without truncation and chec
   --input getnet_ingestion/data/getnet_en_sections.jsonl \
   --output getnet_ingestion/data/getnet_en_embeddings.jsonl
 ```
+
+## Persist in Redis
+
+The persistence command stores each embedding as a Redis hash and creates a Redis Search HNSW vector index using cosine distance. It requires Redis Stack or a Redis service with the Search/vector module enabled:
+
+```bash
+.venv/bin/python -m getnet_ingestion.redis_store
+```
+
+By default, the command reads `getnet_ingestion/data/getnet_en_embeddings.jsonl` and connects to `redis://localhost:6379/0`. Set `GETNET_REDIS_URL` for another endpoint, or pass `--redis-url`. The credentials in the URL should be provided through the environment and not committed to the repository. Each record is written under `getnet:en:section:<id>`; rerunning the command updates those hashes. The index name is `idx:getnet:en`.
+
+The command validates the model, vector dimension, finite vector values, and unique record IDs before writing. It does not delete Redis records absent from the current input file.
