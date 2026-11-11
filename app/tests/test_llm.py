@@ -3,9 +3,11 @@ from types import SimpleNamespace
 from unittest.mock import ANY, call, patch
 
 from app.llm import (
+    LLMConfigurationError,
     ProviderFallbackMiddleware,
     _create_chat_model,
     build_chat_model,
+    check_llm_configuration,
 )
 
 
@@ -207,6 +209,39 @@ class ProviderFallbackTests(unittest.TestCase):
             max_retries=1,
             thinking_level="medium",
         )
+
+    @patch("app.llm._create_chat_model")
+    @patch("app.llm.load_llm_settings")
+    @patch("app.llm._load_environment")
+    def test_checks_primary_provider_configuration_without_network_request(
+        self, _load_environment, load_settings, create_chat_model
+    ):
+        load_settings.return_value = {
+            "model": "openai:gpt-5.5",
+            "fallback_models": [],
+            "thinking_level": None,
+        }
+
+        with patch.dict("os.environ", {"OPENAI_API_KEY": "test-key"}, clear=True):
+            check_llm_configuration()
+
+        create_chat_model.assert_called_once_with("openai:gpt-5.5", None)
+
+    @patch("app.llm.load_llm_settings")
+    @patch("app.llm._load_environment")
+    def test_rejects_missing_primary_provider_credentials(
+        self, _load_environment, load_settings
+    ):
+        load_settings.return_value = {
+            "model": "anthropic:claude",
+            "fallback_models": [],
+        }
+
+        with patch.dict("os.environ", {}, clear=True):
+            with self.assertRaisesRegex(
+                LLMConfigurationError, "ANTHROPIC_API_KEY"
+            ):
+                check_llm_configuration()
 
 
 if __name__ == "__main__":

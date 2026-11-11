@@ -113,7 +113,13 @@ requires its API key and deployed endpoint's `BASETEN_BASE_URL`; its model is
 taken from the `baseten:<model>` identifier in `settings.toml` unless
 overridden by `BASETEN_MODEL`. Edit `settings.toml` to choose another primary
 model or fallback chain. The `thinking_level` setting is passed through for
-Google GenAI models.
+Google GenAI models. Dependency ranges are maintained in `requirements.txt`;
+Docker and CI install exact, hash-verified versions from `requirements.lock`.
+Regenerate the lock for Python 3.12 with:
+
+```bash
+uv pip compile --python-version 3.12 --universal --generate-hashes requirements.txt --output-file requirements.lock
+```
 
 ### Run with Docker
 
@@ -126,10 +132,14 @@ records:
 docker compose up --build
 ```
 
-The API is available at `http://localhost:8000`; its `/health` endpoint can
-confirm startup. Redis data is stored in the `redis-data` volume and survives
-container restarts. Stop the services with `docker compose down`. To also erase
-the local Redis history and data, run `docker compose down --volumes`.
+The API is available at `http://localhost:8000`. `GET /health` checks Redis,
+the configured vector index, and the primary LLM provider's configuration and
+credentials without making a billable LLM request; it returns HTTP 503 if any
+check is unavailable. The API container runs as a non-root user, and the Redis
+Stack image is pinned to a version and digest. Redis data is stored in the
+`redis-data` volume and survives container restarts. Stop the services with
+`docker compose down`. To also erase the local Redis history and data, run
+`docker compose down --volumes`.
 LangSmith tracing is disabled by default for this local stack; set
 `LANGSMITH_TRACING=true` in `.env` to opt in.
 
@@ -139,7 +149,7 @@ recalls the phrase from the first.
 Install dependencies and run the API from the repository root:
 
 ```bash
-python -m pip install -r requirements.txt
+python -m pip install --require-hashes -r requirements.lock
 uvicorn app.main:app --reload
 ```
 
@@ -204,8 +214,8 @@ Run the app tests with:
 
 ```bash
 python -m unittest discover -s app/tests -p 'test_*.py'
+python -m unittest discover -s getnet_ingestion/tests -p 'test_*.py'
 ```
 
-The existing ingestion tests are in `getnet_ingestion/tests/` and can be run
-independently. Customer lookup tests mock Redis so they do not read production
-customer data.
+CI installs the locked dependencies and runs both suites. Customer lookup
+tests mock Redis so they do not read production customer data.

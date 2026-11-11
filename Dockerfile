@@ -5,13 +5,15 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
-COPY requirements.txt ./requirements.txt
-COPY getnet_ingestion/requirements.txt ./getnet_ingestion/requirements.txt
-RUN pip install --no-cache-dir -r requirements.txt
+COPY requirements.lock ./requirements.lock
+RUN pip install --no-cache-dir --require-hashes -r requirements.lock
 
 COPY app ./app
 COPY getnet_ingestion ./getnet_ingestion
 COPY settings.toml ./settings.toml
+
+RUN useradd --create-home --uid 10001 appuser
+USER appuser
 
 EXPOSE 8000
 

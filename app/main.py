@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import os
 from functools import lru_cache
 from pathlib import Path
@@ -7,12 +8,15 @@ from threading import BoundedSemaphore
 from uuid import uuid4
 
 from dotenv import load_dotenv
-from fastapi import Depends, FastAPI, HTTPException, status
+from fastapi import Depends, FastAPI, HTTPException, Response, status
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+from redis import Redis
+from redis.exceptions import RedisError
 
 ENV_FILE = Path(__file__).resolve().parents[1] / ".env"
 load_dotenv(ENV_FILE, override=False)
 
+from app.agents.knowledge import KnowledgeConfigurationError, _knowledge_settings
 from app.auth import AuthenticatedUser, require_authenticated_user
 from app.agents.router import build_router_agent
 from app.customer_data import CustomerDataError
@@ -21,7 +25,7 @@ from app.conversation_memory import (
     ConversationMemoryError,
     build_conversation_history,
 )
-from app.llm import LLMConfigurationError
+from app.llm import LLMConfigurationError, check_llm_configuration
 from app.schemas import (
     AgentName,
     AgentStatus,
@@ -29,6 +33,9 @@ from app.schemas import (
     ChatResponse,
     ErrorResponse,
 )
+from getnet_ingestion.redis_store import RedisStoreError, _resolve_redis_url
+
+LOGGER = logging.getLogger(__name__)
 
 
 def _positive_int_setting(name: str, default: int) -> int:
@@ -74,8 +81,76 @@ def _message_text(content: object) -> str:
 
 
 @app.get("/health")
-def health() -> dict[str, str]:
-    return {"status": "ok"}
+def health(response: Response) -> dict[str, object]:
+    checks = _check_redis_dependencies()
+    try:
+        check_llm_configuration()
+    except LLMConfigurationError as exc:
+        LOGGER.warning(
+            "Health check failed for LLM provider (error_type=%s)",
+            type(exc).__name__,
+        )
+        checks["llm_provider"] = "unavailable"
+    else:
+        checks["llm_provider"] = "ok"
+
+    is_healthy = all(check == "ok" for check in checks.values())
+    response.status_code = (
+        status.HTTP_200_OK
+        if is_healthy
+        else status.HTTP_503_SERVICE_UNAVAILABLE
+    )
+    return {
+        "status": "ok" if is_healthy else "unavailable",
+        "checks": checks,
+    }
+
+
+def _check_redis_dependencies() -> dict[str, str]:
+    checks = {"redis": "unavailable", "rag_index": "unavailable"}
+    try:
+        redis_url = _resolve_redis_url()
+        client = Redis.from_url(
+            redis_url,
+            decode_responses=True,
+            socket_connect_timeout=1,
+            socket_timeout=1,
+        )
+    except (RedisStoreError, RedisError, ValueError) as exc:
+        LOGGER.warning(
+            "Health check failed for Redis (error_type=%s)",
+            type(exc).__name__,
+        )
+        return checks
+
+    try:
+        client.ping()
+        checks["redis"] = "ok"
+        try:
+            index_name = _knowledge_settings()["vector_index"]
+            client.ft(index_name).info()
+        except (KnowledgeConfigurationError, RedisError) as exc:
+            LOGGER.warning(
+                "Health check failed for RAG index (error_type=%s)",
+                type(exc).__name__,
+            )
+        else:
+            checks["rag_index"] = "ok"
+    except RedisError as exc:
+        LOGGER.warning(
+            "Health check failed for Redis (error_type=%s)",
+            type(exc).__name__,
+        )
+    finally:
+        try:
+            client.close()
+        except RedisError as exc:
+            LOGGER.warning(
+                "Could not close Redis health-check connection (error_type=%s)",
+                type(exc).__name__,
+            )
+            checks["redis"] = "unavailable"
+    return checks
 
 
 @app.post(

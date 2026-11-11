@@ -176,3 +176,28 @@ def build_chat_model() -> tuple[Any, str, list[tuple[str, Callable[[], Any]]]]:
         for fallback in settings["fallback_models"]
     ]
     return model, model_id, fallback_models
+
+
+def check_llm_configuration() -> None:
+    """Validate the primary provider configuration without making a request."""
+    _load_environment()
+    settings = load_llm_settings()
+    model_id = settings["model"]
+    provider = model_id.partition(":")[0]
+
+    required_credentials = {
+        "openai": (("OPENAI_API_KEY",),),
+        "anthropic": (("ANTHROPIC_API_KEY",),),
+        "google_genai": (("GOOGLE_API_KEY",),),
+    }
+    missing = [
+        " or ".join(names)
+        for names in required_credentials.get(provider, ())
+        if not any(os.getenv(name) for name in names)
+    ]
+    if missing:
+        raise LLMConfigurationError(
+            "Missing required LLM configuration: " + ", ".join(missing)
+        )
+
+    _create_chat_model(model_id, settings.get("thinking_level"))
