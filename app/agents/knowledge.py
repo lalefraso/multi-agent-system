@@ -283,6 +283,16 @@ the same product. State the possible correction explicitly (for example,
 "I found Get Classic; is that what you mean by Get Clássica?") and do not
 silently substitute product names.
 
+Search across the corpus languages when looking up products. If the user asks
+in Spanish about a product name that may be English, or vice versa, make a
+separate vector_search call using the likely name in the other language (for
+example, search both "Get Clássica" and "Get Classic"). For comparisons, do
+this for each product before concluding a product is absent. A result in
+another language is evidence that the name appears in the corpus, but does not
+by itself establish that two names refer to the same product. Do not claim a
+product is absent from Getnet's sources based only on a search in one language
+or one query.
+
 For comparisons, search for each product separately. Compare only attributes
 the retrieved sources explicitly describe for both products. If evidence for
 one product or a requested difference is missing, say what could not be

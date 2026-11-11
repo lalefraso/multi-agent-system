@@ -4,6 +4,7 @@ from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 from app.agents.knowledge import (
+    KNOWLEDGE_SYSTEM_PROMPT,
     KnowledgeConfigurationError,
     _normalize_url,
     knowledge_agent,
@@ -13,6 +14,17 @@ from app.agents.knowledge import (
 
 
 class KnowledgeSearchTests(unittest.TestCase):
+    def test_prompt_requires_cross_language_product_search(self):
+        self.assertIn("Search across the corpus languages", KNOWLEDGE_SYSTEM_PROMPT)
+        self.assertIn(
+            'search both "Get Clássica" and "Get Classic"',
+            KNOWLEDGE_SYSTEM_PROMPT,
+        )
+        self.assertIn(
+            "based only on a search in one language\nor one query.",
+            KNOWLEDGE_SYSTEM_PROMPT,
+        )
+
     def test_normalizes_urls_without_relaxing_path_allowlist(self):
         self.assertEqual(
             _normalize_url("HTTPS://Getnet.net/en/product/"),
