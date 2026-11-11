@@ -163,7 +163,6 @@ class KnowledgeSearchTests(unittest.TestCase):
         answer = knowledge_agent.invoke(
             {
                 "query": "What payment products are available?",
-                "user_id": "customer-1",
             }
         )
 

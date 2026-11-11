@@ -1,3 +1,4 @@
+import json
 import unittest
 from uuid import UUID
 from unittest.mock import patch
@@ -160,6 +161,41 @@ class ConversationHistoryTests(unittest.TestCase):
         ):
             history.load_context()
 
+        history.close()
+
+    @patch("app.conversation_memory.Redis.from_url")
+    @patch(
+        "app.conversation_memory._resolve_redis_url",
+        return_value="redis://test",
+    )
+    def test_sanitizes_legacy_history_before_sending_it_to_agent(
+        self, _resolve_url, redis_from_url
+    ):
+        redis_from_url.return_value.lrange.return_value = [
+            json.dumps(
+                {
+                    "type": "human",
+                    "content": (
+                        '{"message":"Previous question",'
+                        '"user_id":"customer-123"}'
+                    ),
+                }
+            ),
+            json.dumps(
+                {"type": "ai", "content": "Your id is customer-123"}
+            ),
+        ]
+        history = ConversationHistory(
+            "customer-123", UUID("9015dbdd-608a-443e-8ddb-a142817ad9df")
+        )
+
+        self.assertEqual(
+            history.load_context(),
+            [
+                HumanMessage(content="Previous question"),
+                AIMessage(content="Your id is [redacted]"),
+            ],
+        )
         history.close()
 
 

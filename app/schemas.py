@@ -19,10 +19,9 @@ class ChatRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     message: str = Field(min_length=1, max_length=4000)
-    user_id: str = Field(min_length=1, max_length=128)
     conversation_id: UUID | None = None
 
-    @field_validator("message", "user_id")
+    @field_validator("message")
     @classmethod
     def reject_blank_values(cls, value: str) -> str:
         if not value.strip():
@@ -42,24 +41,10 @@ class AgentToolInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     query: str = Field(min_length=1, max_length=4000)
-    user_id: str = Field(min_length=1, max_length=128)
 
 
 class KnowledgeAgentInput(AgentToolInput):
     pass
-
-
-class CustomerSupportAgentInput(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    user_id: str = Field(min_length=1, max_length=128)
-
-    @field_validator("user_id")
-    @classmethod
-    def reject_blank_user_id(cls, value: str) -> str:
-        if not value.strip():
-            raise ValueError("must not be blank")
-        return value
 
 
 class VectorSearchInput(BaseModel):

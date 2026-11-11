@@ -7,12 +7,13 @@ from threading import BoundedSemaphore
 from uuid import uuid4
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException, status
+from fastapi import Depends, FastAPI, HTTPException, status
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
 ENV_FILE = Path(__file__).resolve().parents[1] / ".env"
 load_dotenv(ENV_FILE, override=False)
 
+from app.auth import AuthenticatedUser, require_authenticated_user
 from app.agents.router import build_router_agent
 from app.customer_data import CustomerDataError
 from app.conversation_memory import (
@@ -50,10 +51,9 @@ _chat_slots = BoundedSemaphore(MAX_CONCURRENT_CHATS)
 app = FastAPI(title="Getnet Multi-Agent API", version="0.1.0")
 
 
-@lru_cache(maxsize=1)
-def _router_agent():
+def _router_agent(user_id: str):
     try:
-        return build_router_agent()
+        return build_router_agent(user_id)
     except LLMConfigurationError as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -82,12 +82,17 @@ def health() -> dict[str, str]:
     "/chat",
     response_model=ChatResponse,
     responses={
+        401: {"model": ErrorResponse},
+        403: {"model": ErrorResponse},
         409: {"model": ErrorResponse},
         429: {"model": ErrorResponse},
         503: {"model": ErrorResponse},
     },
 )
-def chat(request: ChatRequest) -> ChatResponse:
+def chat(
+    request: ChatRequest,
+    authenticated_user: AuthenticatedUser = Depends(require_authenticated_user),
+) -> ChatResponse:
     if not _chat_slots.acquire(blocking=False):
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
@@ -95,17 +100,17 @@ def chat(request: ChatRequest) -> ChatResponse:
             headers={"Retry-After": "1"},
         )
     try:
-        return _process_chat(request)
+        return _process_chat(request, authenticated_user.user_id)
     finally:
         _chat_slots.release()
 
 
-def _process_chat(request: ChatRequest) -> ChatResponse:
+def _process_chat(request: ChatRequest, user_id: str) -> ChatResponse:
     conversation_id = request.conversation_id or uuid4()
-    user_message = request.model_dump_json(include={"message", "user_id"})
+    user_message = request.message
     try:
-        router_agent = _router_agent()
-        history = build_conversation_history(request.user_id, conversation_id)
+        router_agent = _router_agent(user_id)
+        history = build_conversation_history(user_id, conversation_id)
     except LLMConfigurationError as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -121,7 +126,7 @@ def _process_chat(request: ChatRequest) -> ChatResponse:
         try:
             history.acquire_turn_lock()
             messages = history.load_context()
-            messages.append(HumanMessage(content=user_message))
+            messages.append(HumanMessage(content=request.message))
             result = router_agent.invoke({"messages": messages})
 
             result_messages = result.get("messages", [])

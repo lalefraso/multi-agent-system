@@ -9,11 +9,12 @@ not a separate LLM agent.
 
 ```text
 POST /chat
-  -> ChatRequest schema
+  -> JWT/OIDC authentication and verified customer identity
+  -> ChatRequest schema (message and optional conversation_id only)
   -> Redis conversation history (last 20 messages, 30-day TTL)
   -> Router agent (LangChain)
        -> knowledge_agent tool
-       -> customer_support_agent tool (Redis lookup by user_id)
+       -> zero-argument customer_support_agent (server-scoped Redis lookup)
   -> Redis conversation history stores the user turn and final answer
   -> ChatResponse schema
 ```
@@ -50,12 +51,33 @@ from the user's query, passes only configured URLs to Tavily, and filters
 returned source URLs against that exact list. Set `TAVILY_API_KEY` in `.env`
 when enabling external lookup.
 
-The customer-support tool reads the complete record at
-`getnet_users:customer:<user_id>` from the same Redis connection configured by
-`GETNET_REDIS_URL` or `REDIS_URL`. It returns hash, string, or RedisJSON records
-as JSON and reports a missing record explicitly. The user's message is not used
-to filter the record. A customer-support-only response returns the lookup
-output directly instead of asking another LLM to rewrite it.
+The customer-support tool has no model-visible arguments. The API creates it
+for the authenticated request and binds the verified customer identity in the
+server-side closure; the model can only request the lookup, not choose a
+customer. It reads `getnet_users:customer:<user_id>` from the same Redis
+connection configured by `GETNET_REDIS_URL` or `REDIS_URL`. Identity fields
+named `user_id` are removed from the tool result. The request message and
+conversation history sent to the model do not include the authenticated
+identity.
+
+`POST /chat` requires an OIDC access token in the `Authorization: Bearer`
+header. Configure `OIDC_ISSUER`, `OIDC_AUDIENCE`, and `OIDC_JWKS_URL`; the API
+validates the JWT signature (RS256), issuer, audience, expiration, and subject
+against the provider's signing keys. `OIDC_USER_ID_CLAIM` selects the signed
+claim used to locate the Redis customer record and defaults to `sub`. Configure
+it to a trusted customer-ID claim if the provider's subject is not the Redis
+key. The selected claim must be issued by the trusted identity provider,
+server-controlled (not user-editable), and mapped to the intended customer
+record. Missing or invalid tokens are rejected;
+an unavailable signing-key service fails closed with HTTP 503. Health checks
+remain unauthenticated.
+
+The customer lookup currently sends the rest of the customer's Redis record to
+the model. Before production, replace that broad response with an allowlist of
+fields needed for each supported request, and enforce any required token scopes
+or tenant/role policy. Also use per-identity rate limits and audit events that
+avoid logging bearer tokens, prompts, or customer data; protect Redis with
+network restrictions, TLS, and least-privilege credentials.
 
 Conversation memory uses Redis lists on the same deployment. Each conversation
 is scoped to both `user_id` and a `conversation_id`; when omitted, the API
@@ -126,13 +148,14 @@ The service provides `GET /health` and `POST /chat`. Example request:
 ```json
 {
   "message": "When will the money from yesterday's sales be deposited?",
-  "user_id": "cliente1988",
   "conversation_id": "9015dbdd-608a-443e-8ddb-a142817ad9df"
 }
 ```
 
-Omit `conversation_id` on the first turn; use the ID returned by the API to
-continue that conversation.
+Send this body with `Authorization: Bearer <OIDC_ACCESS_TOKEN>`. Omit
+`conversation_id` on the first turn; use the ID returned by the API to continue
+that conversation. `user_id` is not accepted in the request body; the API
+derives it from the validated token.
 
 To test memory across two requests, start the API with a configured LLM and a
 Redis deployment that supports Redis JSON and Redis Search. Send a first turn:
@@ -140,20 +163,22 @@ Redis deployment that supports Redis JSON and Redis Search. Send a first turn:
 ```bash
 curl -sS http://localhost:8000/chat \
   -H 'Content-Type: application/json' \
-  -d '{"message":"Remember this test phrase: cobalt otter 47.","user_id":"memory-test-user"}'
+  -H "Authorization: Bearer $ACCESS_TOKEN" \
+  -d '{"message":"Remember this test phrase: cobalt otter 47."}'
 ```
 
-Copy the returned `conversation_id` into the next request, keeping the same
-`user_id`:
+Copy the returned `conversation_id` into the next request, using the same
+authenticated identity:
 
 ```bash
 curl -sS http://localhost:8000/chat \
   -H 'Content-Type: application/json' \
-  -d '{"message":"What test phrase did I ask you to remember?","user_id":"memory-test-user","conversation_id":"PASTE-CONVERSATION-ID-HERE"}'
+  -H "Authorization: Bearer $ACCESS_TOKEN" \
+  -d '{"message":"What test phrase did I ask you to remember?","conversation_id":"PASTE-CONVERSATION-ID-HERE"}'
 ```
 
 The second answer should recall `cobalt otter 47`. If you omit the conversation
-ID or change the user ID, the request uses a different history.
+ID or use a token for another identity, the request uses a different history.
 
 The response schema is:
 
@@ -162,18 +187,16 @@ The response schema is:
   "request_id": "f9270a7c-5347-452d-910c-d70c025a24a4",
   "conversation_id": "9015dbdd-608a-443e-8ddb-a142817ad9df",
   "status": "completed",
-  "answer": "{\"account_status\":\"active\",\"user_id\":\"cliente1988\"}",
+  "answer": "{\"account_status\":\"active\"}",
   "agents_used": ["customer_support"]
 }
 ```
 
 `answer` contains the customer's JSON record as a string when the customer
 lookup is the only tool used. A missing record is returned as
-`{"found":false,"user_id":"..."}`. `agents_used` can contain `knowledge`
-and/or `customer_support`. Invalid requests are rejected by the schema.
-`user_id` identifies the Redis key but is not authentication; deployments must
-authenticate callers and authorize access to that user before exposing this
-endpoint.
+`{"found":false}`. `agents_used` can contain `knowledge` and/or
+`customer_support`. Invalid requests are rejected by the schema; missing or
+invalid authentication is rejected before the chat handler runs.
 
 ## Tests
 

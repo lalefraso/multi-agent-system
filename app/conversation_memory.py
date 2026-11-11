@@ -42,6 +42,7 @@ class ConversationHistory:
             self._client = Redis.from_url(
                 redis_url, decode_responses=True
             )
+            self._user_id = user_id
             self._key = (
                 f"{HISTORY_KEY_PREFIX}{_session_id(user_id, conversation_id)}"
             )
@@ -74,10 +75,20 @@ class ConversationHistory:
                     item.get("content"), str
                 ):
                     raise ValueError("Invalid conversation message")
+                content = item["content"].replace(self._user_id, "[redacted]")
                 if item.get("type") == "human":
-                    messages.append(HumanMessage(content=item["content"]))
+                    try:
+                        legacy_request = json.loads(content)
+                    except json.JSONDecodeError:
+                        legacy_request = None
+                    if (
+                        isinstance(legacy_request, dict)
+                        and isinstance(legacy_request.get("message"), str)
+                    ):
+                        content = legacy_request["message"]
+                    messages.append(HumanMessage(content=content))
                 elif item.get("type") == "ai":
-                    messages.append(AIMessage(content=item["content"]))
+                    messages.append(AIMessage(content=content))
                 else:
                     raise ValueError("Unsupported conversation message type")
         except (json.JSONDecodeError, ValueError) as exc:

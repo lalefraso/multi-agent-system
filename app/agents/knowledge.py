@@ -402,9 +402,8 @@ def _build_knowledge_agent():
 
 
 @tool("knowledge_agent", args_schema=KnowledgeAgentInput)
-def knowledge_agent(query: str, user_id: str) -> str:
+def knowledge_agent(query: str) -> str:
     """Answer Getnet product and service questions using approved knowledge sources."""
-    del user_id
     response = _build_knowledge_agent().invoke(
         {"messages": [{"role": "user", "content": query}]}
     )

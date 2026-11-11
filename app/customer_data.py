@@ -15,6 +15,18 @@ class CustomerDataError(RuntimeError):
     """Raised when customer data cannot be retrieved from Redis."""
 
 
+def _redact_user_id(value: object) -> object:
+    if isinstance(value, dict):
+        return {
+            key: _redact_user_id(item)
+            for key, item in value.items()
+            if key.casefold() != "user_id"
+        }
+    if isinstance(value, list):
+        return [_redact_user_id(item) for item in value]
+    return value
+
+
 def fetch_customer_data(user_id: str) -> str:
     try:
         redis_url = _resolve_redis_url()
@@ -32,13 +44,13 @@ def fetch_customer_data(user_id: str) -> str:
             record_type = record_type.decode("utf-8")
 
         if record_type == "none":
-            record: object = {"found": False, "user_id": user_id}
+            record: object = {"found": False}
         elif record_type == "hash":
             record = client.hgetall(key)
         elif record_type == "string":
             value = client.get(key)
             if value is None:
-                record = {"found": False, "user_id": user_id}
+                record = {"found": False}
             else:
                 try:
                     record = json.loads(value)
@@ -55,4 +67,6 @@ def fetch_customer_data(user_id: str) -> str:
     finally:
         client.close()
 
-    return json.dumps(record, ensure_ascii=False, sort_keys=True)
+    return json.dumps(
+        _redact_user_id(record), ensure_ascii=False, sort_keys=True
+    )

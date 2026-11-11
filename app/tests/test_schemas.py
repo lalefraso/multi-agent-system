@@ -7,7 +7,6 @@ from app.schemas import (
     AgentStatus,
     ChatRequest,
     ChatResponse,
-    CustomerSupportAgentInput,
     KnowledgeAgentInput,
 )
 
@@ -16,29 +15,21 @@ class ChatSchemaTests(unittest.TestCase):
     def test_accepts_expected_api_payload(self):
         request = ChatRequest(
             message="When will yesterday's sales be deposited?",
-            user_id="customer-123",
         )
 
         self.assertEqual(request.message, "When will yesterday's sales be deposited?")
-        self.assertEqual(request.user_id, "customer-123")
 
     def test_rejects_blank_and_extra_request_fields(self):
         with self.assertRaises(ValidationError):
-            ChatRequest(message="  ", user_id="customer-123")
+            ChatRequest(message="  ")
         with self.assertRaises(ValidationError):
-            ChatRequest(message="Help", user_id="customer-123", debug=True)
+            ChatRequest(message="Help", user_id="customer-123")
 
     def test_tools_accept_their_required_inputs(self):
-        knowledge = KnowledgeAgentInput(
-            query="Help with a payment", user_id="customer-123"
-        )
-        customer_support = CustomerSupportAgentInput(user_id="customer-123")
+        knowledge = KnowledgeAgentInput(query="Help with a payment")
         self.assertEqual(knowledge.query, "Help with a payment")
-        self.assertEqual(customer_support.user_id, "customer-123")
         with self.assertRaises(ValidationError):
-            CustomerSupportAgentInput(
-                user_id="customer-123", query="Help with a payment"
-            )
+            KnowledgeAgentInput(query="Help", user_id="customer-123")
 
     def test_response_has_request_id_and_explicit_status(self):
         conversation_id = uuid4()

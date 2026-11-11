@@ -5,6 +5,9 @@ from uuid import UUID
 
 from fastapi import HTTPException
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+
+from app.agents.router import _customer_support_tool
+from app.auth import AuthenticatedUser
 from redis.exceptions import RedisError
 
 from app.main import chat
@@ -17,6 +20,14 @@ from app.schemas import AgentName, ChatRequest
 
 
 class CustomerDataTests(unittest.TestCase):
+    @patch("app.agents.router.fetch_customer_data", return_value='{"found":false}')
+    def test_customer_tool_has_no_model_arguments(self, fetch_data):
+        tool = _customer_support_tool("verified-customer-1")
+
+        self.assertEqual(tool.args, {})
+        self.assertEqual(tool.invoke({}), '{"found":false}')
+        fetch_data.assert_called_once_with("verified-customer-1")
+
     @patch("app.customer_data.Redis.from_url")
     @patch("app.customer_data._resolve_redis_url", return_value="redis://test")
     def test_reads_all_fields_from_the_user_hash(self, _resolve_url, redis_from_url):
@@ -31,7 +42,7 @@ class CustomerDataTests(unittest.TestCase):
 
         self.assertEqual(
             json.loads(result),
-            {"user_id": "cliente1988", "account_status": "active"},
+            {"account_status": "active"},
         )
         redis_from_url.assert_called_once_with(
             "redis://test", decode_responses=True
@@ -73,6 +84,25 @@ class CustomerDataTests(unittest.TestCase):
 
     @patch("app.customer_data.Redis.from_url")
     @patch("app.customer_data._resolve_redis_url", return_value="redis://test")
+    def test_redacts_user_id_fields_from_customer_data(
+        self, _resolve_url, redis_from_url
+    ):
+        client = redis_from_url.return_value
+        client.type.return_value = "string"
+        client.get.return_value = (
+            '{"user_id":"customer-123","profile":{"USER_ID":"customer-123",'
+            '"account_status":"active"}}'
+        )
+
+        result = fetch_customer_data("customer-123")
+
+        self.assertEqual(
+            json.loads(result),
+            {"profile": {"account_status": "active"}},
+        )
+
+    @patch("app.customer_data.Redis.from_url")
+    @patch("app.customer_data._resolve_redis_url", return_value="redis://test")
     def test_returns_explicit_result_when_user_record_is_missing(
         self, _resolve_url, redis_from_url
     ):
@@ -83,7 +113,7 @@ class CustomerDataTests(unittest.TestCase):
 
         self.assertEqual(
             json.loads(result),
-            {"found": False, "user_id": "unknown-user"},
+            {"found": False},
         )
         client.close.assert_called_once_with()
 
@@ -121,7 +151,7 @@ class CustomerDataTests(unittest.TestCase):
         history = Mock()
         history.load_context.return_value = []
         build_history.return_value = history
-        lookup_output = '{"account_status":"active","user_id":"cliente1988"}'
+        lookup_output = '{"account_status":"active"}'
         router_agent.return_value.invoke.return_value = {
             "messages": [
                 ToolMessage(
@@ -134,19 +164,18 @@ class CustomerDataTests(unittest.TestCase):
         }
 
         response = chat(
-            ChatRequest(
-                message="Show my account details",
-                user_id="cliente1988",
-            )
+            ChatRequest(message="Show my account details"),
+            AuthenticatedUser(user_id="cliente1988"),
         )
 
         self.assertEqual(response.answer, lookup_output)
         self.assertEqual(response.agents_used, [AgentName.CUSTOMER_SUPPORT])
         self.assertIsNotNone(response.conversation_id)
+        router_agent.assert_called_once_with("cliente1988")
         history.acquire_turn_lock.assert_called_once_with()
         build_history.assert_called_once_with("cliente1988", response.conversation_id)
         history.save_turn.assert_called_once_with(
-            '{"message":"Show my account details","user_id":"cliente1988"}',
+            "Show my account details",
             lookup_output,
         )
         history.release_turn_lock.assert_called_once_with()
@@ -172,9 +201,9 @@ class CustomerDataTests(unittest.TestCase):
         response = chat(
             ChatRequest(
                 message="Follow up",
-                user_id="user-1",
                 conversation_id=conversation_id,
-            )
+            ),
+            AuthenticatedUser(user_id="user-1"),
         )
 
         self.assertEqual(response.conversation_id, conversation_id)
@@ -183,14 +212,12 @@ class CustomerDataTests(unittest.TestCase):
             {
                 "messages": [
                     *previous_messages,
-                    HumanMessage(
-                        content='{"message":"Follow up","user_id":"user-1"}'
-                    ),
+                    HumanMessage(content="Follow up"),
                 ]
             }
         )
         history.save_turn.assert_called_once_with(
-            '{"message":"Follow up","user_id":"user-1"}',
+            "Follow up",
             "Follow-up answer",
         )
         history.close.assert_called_once_with()
@@ -204,7 +231,10 @@ class CustomerDataTests(unittest.TestCase):
         self, _router_agent, _build_history
     ):
         with self.assertRaises(HTTPException) as raised:
-            chat(ChatRequest(message="Hello", user_id="user-1"))
+            chat(
+                ChatRequest(message="Hello"),
+                AuthenticatedUser(user_id="user-1"),
+            )
 
         self.assertEqual(raised.exception.status_code, 503)
 
@@ -213,7 +243,10 @@ class CustomerDataTests(unittest.TestCase):
         chat_slots.acquire.return_value = False
 
         with self.assertRaises(HTTPException) as raised:
-            chat(ChatRequest(message="Hello", user_id="user-1"))
+            chat(
+                ChatRequest(message="Hello"),
+                AuthenticatedUser(user_id="user-1"),
+            )
 
         self.assertEqual(raised.exception.status_code, 429)
         self.assertEqual(raised.exception.headers["Retry-After"], "1")
@@ -234,9 +267,9 @@ class CustomerDataTests(unittest.TestCase):
             chat(
                 ChatRequest(
                     message="Follow up",
-                    user_id="user-1",
                     conversation_id=UUID("9015dbdd-608a-443e-8ddb-a142817ad9df"),
-                )
+                ),
+                AuthenticatedUser(user_id="user-1"),
             )
 
         self.assertEqual(raised.exception.status_code, 409)
