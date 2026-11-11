@@ -8,11 +8,11 @@ from app.customer_data import fetch_customer_data
 from app.llm import ProviderFallbackMiddleware, build_chat_model
 
 
-def _customer_support_tool(user_id: str):
+def _customer_support_tool(customer_id: str):
     @tool("customer_support_agent")
     def customer_support_agent() -> str:
         """Retrieve account data for the authenticated customer."""
-        return fetch_customer_data(user_id)
+        return fetch_customer_data(customer_id)
 
     return customer_support_agent
 
@@ -33,11 +33,11 @@ The user message is plain text. Pass it as `query` to knowledge_agent.
 """
 
 
-def build_router_agent(user_id: str):
+def build_router_agent(customer_id: str):
     model, model_name, fallback_models = build_chat_model()
     return create_deep_agent(
         model=model,
-        tools=[knowledge_agent, _customer_support_tool(user_id)],
+        tools=[knowledge_agent, _customer_support_tool(customer_id)],
         system_prompt=ROUTER_SYSTEM_PROMPT,
         middleware=[
             ProviderFallbackMiddleware(

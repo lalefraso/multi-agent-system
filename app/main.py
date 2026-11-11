@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import logging
 import os
-from functools import lru_cache
 from pathlib import Path
 from threading import BoundedSemaphore
 from uuid import uuid4
@@ -17,12 +16,20 @@ ENV_FILE = Path(__file__).resolve().parents[1] / ".env"
 load_dotenv(ENV_FILE, override=False)
 
 from app.agents.knowledge import KnowledgeConfigurationError, _knowledge_settings
-from app.auth import AuthenticatedUser, require_authenticated_user
+from app.auth import AuthenticatedPrincipal, require_authenticated_user
+from app.authorization import (
+    CustomerAuthorizationError,
+    CustomerNotAuthorizedError,
+    CustomerSelectionRequiredError,
+    authorize_customer_access,
+)
 from app.agents.router import build_router_agent
 from app.customer_data import CustomerDataError
 from app.conversation_memory import (
     ConversationBusyError,
+    ConversationHistory,
     ConversationMemoryError,
+    ConversationOwnershipError,
     build_conversation_history,
 )
 from app.llm import LLMConfigurationError, check_llm_configuration
@@ -58,9 +65,9 @@ _chat_slots = BoundedSemaphore(MAX_CONCURRENT_CHATS)
 app = FastAPI(title="Getnet Multi-Agent API", version="0.1.0")
 
 
-def _router_agent(user_id: str):
+def _router_agent(customer_id: str):
     try:
-        return build_router_agent(user_id)
+        return build_router_agent(customer_id)
     except LLMConfigurationError as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -78,6 +85,16 @@ def _message_text(content: object) -> str:
             if isinstance(block, dict) and isinstance(block.get("text"), str)
         )
     return ""
+
+
+def _close_history(history: ConversationHistory) -> None:
+    try:
+        history.close()
+    except ConversationMemoryError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=str(exc),
+        ) from exc
 
 
 @app.get("/health")
@@ -159,6 +176,8 @@ def _check_redis_dependencies() -> dict[str, str]:
     responses={
         401: {"model": ErrorResponse},
         403: {"model": ErrorResponse},
+        400: {"model": ErrorResponse},
+        404: {"model": ErrorResponse},
         409: {"model": ErrorResponse},
         429: {"model": ErrorResponse},
         503: {"model": ErrorResponse},
@@ -166,7 +185,7 @@ def _check_redis_dependencies() -> dict[str, str]:
 )
 def chat(
     request: ChatRequest,
-    authenticated_user: AuthenticatedUser = Depends(require_authenticated_user),
+    principal: AuthenticatedPrincipal = Depends(require_authenticated_user),
 ) -> ChatResponse:
     if not _chat_slots.acquire(blocking=False):
         raise HTTPException(
@@ -175,27 +194,67 @@ def chat(
             headers={"Retry-After": "1"},
         )
     try:
-        return _process_chat(request, authenticated_user.user_id)
+        return _process_chat(request, principal.principal_id)
     finally:
         _chat_slots.release()
 
 
-def _process_chat(request: ChatRequest, user_id: str) -> ChatResponse:
+def _process_chat(request: ChatRequest, principal_id: str) -> ChatResponse:
     conversation_id = request.conversation_id or uuid4()
     user_message = request.message
     try:
-        router_agent = _router_agent(user_id)
-        history = build_conversation_history(user_id, conversation_id)
-    except LLMConfigurationError as exc:
+        customer_id = authorize_customer_access(
+            principal_id, request.customer_id
+        )
+    except CustomerSelectionRequiredError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                "customer_id is required when the authenticated principal "
+                "has access to multiple customer records"
+            ),
+        ) from exc
+    except CustomerNotAuthorizedError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Customer record not found",
+        ) from exc
+    except CustomerAuthorizationError as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=str(exc),
         ) from exc
+
+    try:
+        history = build_conversation_history(
+            principal_id, customer_id, conversation_id
+        )
     except ConversationMemoryError as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=str(exc),
         ) from exc
+
+    try:
+        history.claim_ownership()
+    except ConversationOwnershipError as exc:
+        _close_history(history)
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Conversation not found",
+        ) from exc
+    except ConversationMemoryError as exc:
+        _close_history(history)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=str(exc),
+        ) from exc
+
+    try:
+        router_agent = _router_agent(customer_id)
+    except HTTPException:
+        _close_history(history)
+        raise
 
     try:
         try:

@@ -1,7 +1,7 @@
 import json
 import unittest
 from uuid import UUID
-from unittest.mock import patch
+from unittest.mock import call, patch
 
 from langchain_core.messages import AIMessage, HumanMessage
 from redis.exceptions import RedisError
@@ -9,12 +9,14 @@ from redis.exceptions import RedisError
 from app.conversation_memory import (
     CONVERSATION_LOCK_TTL_SECONDS,
     CONVERSATION_LOCK_WAIT_SECONDS,
+    CONVERSATION_OWNER_PREFIX,
     CONVERSATION_TTL_SECONDS,
     HISTORY_KEY_PREFIX,
     MAX_CONTEXT_MESSAGES,
     ConversationBusyError,
     ConversationHistory,
     ConversationMemoryError,
+    ConversationOwnershipError,
     _session_id,
 )
 
@@ -29,18 +31,24 @@ class ConversationHistoryTests(unittest.TestCase):
         self, _resolve_url, redis_from_url
     ):
         conversation_id = UUID("9015dbdd-608a-443e-8ddb-a142817ad9df")
-        history = ConversationHistory("user-1", conversation_id)
+        history = ConversationHistory("principal-1", "customer-1", conversation_id)
 
         redis_from_url.assert_called_once_with(
             "redis://test", decode_responses=True
         )
         self.assertEqual(
             history._key,
-            f"{HISTORY_KEY_PREFIX}{_session_id('user-1', conversation_id)}",
+            f"{HISTORY_KEY_PREFIX}"
+            f"{_session_id('principal-1', 'customer-1', conversation_id)}",
+        )
+        self.assertEqual(
+            history._owner_key,
+            f"{CONVERSATION_OWNER_PREFIX}{conversation_id}",
         )
         self.assertNotEqual(
             history._key,
-            f"{HISTORY_KEY_PREFIX}{_session_id('another-user', conversation_id)}",
+            f"{HISTORY_KEY_PREFIX}"
+            f"{_session_id('another-principal', 'customer-1', conversation_id)}",
         )
         history.close()
         redis_from_url.return_value.close.assert_called_once_with()
@@ -59,7 +67,9 @@ class ConversationHistoryTests(unittest.TestCase):
             for i in range(25 - MAX_CONTEXT_MESSAGES, 25)
         ]
         history = ConversationHistory(
-            "user-1", UUID("9015dbdd-608a-443e-8ddb-a142817ad9df")
+            "principal-1",
+            "customer-1",
+            UUID("9015dbdd-608a-443e-8ddb-a142817ad9df"),
         )
 
         self.assertEqual(
@@ -73,14 +83,21 @@ class ConversationHistoryTests(unittest.TestCase):
             history._key, -MAX_CONTEXT_MESSAGES, -1
         )
         history.save_turn("new question", "new answer")
-        client.rpush.assert_called_once_with(
+        client.pipeline.assert_called_once_with(transaction=True)
+        transaction = client.pipeline.return_value.__enter__.return_value
+        transaction.rpush.assert_called_once_with(
             history._key,
             '{"type": "human", "content": "new question"}',
             '{"type": "ai", "content": "new answer"}',
         )
-        client.expire.assert_called_once_with(
-            history._key, CONVERSATION_TTL_SECONDS
+        self.assertEqual(
+            transaction.expire.call_args_list,
+            [
+                call(history._key, CONVERSATION_TTL_SECONDS),
+                call(history._owner_key, CONVERSATION_TTL_SECONDS),
+            ],
         )
+        transaction.execute.assert_called_once_with()
         history.close()
 
     @patch("app.conversation_memory.Redis.from_url")
@@ -92,7 +109,9 @@ class ConversationHistoryTests(unittest.TestCase):
         self, _resolve_url, redis_from_url
     ):
         conversation_id = UUID("9015dbdd-608a-443e-8ddb-a142817ad9df")
-        history = ConversationHistory("user-1", conversation_id)
+        history = ConversationHistory(
+            "principal-1", "customer-1", conversation_id
+        )
 
         history.acquire_turn_lock()
         redis_from_url.return_value.lock.assert_called_once_with(
@@ -119,7 +138,9 @@ class ConversationHistoryTests(unittest.TestCase):
     ):
         redis_from_url.return_value.lock.return_value.acquire.return_value = False
         history = ConversationHistory(
-            "user-1", UUID("9015dbdd-608a-443e-8ddb-a142817ad9df")
+            "principal-1",
+            "customer-1",
+            UUID("9015dbdd-608a-443e-8ddb-a142817ad9df"),
         )
 
         with self.assertRaisesRegex(ConversationBusyError, "retry shortly"):
@@ -142,7 +163,9 @@ class ConversationHistoryTests(unittest.TestCase):
             ConversationMemoryError, "Could not configure Redis"
         ):
             ConversationHistory(
-                "user-1", UUID("9015dbdd-608a-443e-8ddb-a142817ad9df")
+                "principal-1",
+                "customer-1",
+                UUID("9015dbdd-608a-443e-8ddb-a142817ad9df"),
             )
 
     @patch("app.conversation_memory.Redis.from_url")
@@ -153,7 +176,9 @@ class ConversationHistoryTests(unittest.TestCase):
     def test_corrupt_history_is_reported(self, _resolve_url, redis_from_url):
         redis_from_url.return_value.lrange.return_value = ["not-json"]
         history = ConversationHistory(
-            "user-1", UUID("9015dbdd-608a-443e-8ddb-a142817ad9df")
+            "principal-1",
+            "customer-1",
+            UUID("9015dbdd-608a-443e-8ddb-a142817ad9df"),
         )
 
         with self.assertRaisesRegex(
@@ -186,7 +211,9 @@ class ConversationHistoryTests(unittest.TestCase):
             ),
         ]
         history = ConversationHistory(
-            "customer-123", UUID("9015dbdd-608a-443e-8ddb-a142817ad9df")
+            "principal-1",
+            "customer-123",
+            UUID("9015dbdd-608a-443e-8ddb-a142817ad9df"),
         )
 
         self.assertEqual(
@@ -197,6 +224,68 @@ class ConversationHistoryTests(unittest.TestCase):
             ],
         )
         history.close()
+
+    @patch("app.conversation_memory.Redis.from_url")
+    @patch(
+        "app.conversation_memory._resolve_redis_url",
+        return_value="redis://test",
+    )
+    def test_claims_conversation_ownership_for_principal_and_customer(
+        self, _resolve_url, redis_from_url
+    ):
+        conversation_id = UUID("9015dbdd-608a-443e-8ddb-a142817ad9df")
+        history = ConversationHistory(
+            "principal-1", "customer-1", conversation_id
+        )
+
+        history.claim_ownership()
+
+        redis_from_url.return_value.set.assert_called_once_with(
+            history._owner_key,
+            history._owner_token,
+            nx=True,
+            ex=CONVERSATION_TTL_SECONDS,
+        )
+        history.close()
+
+    @patch("app.conversation_memory.Redis.from_url")
+    @patch(
+        "app.conversation_memory._resolve_redis_url",
+        return_value="redis://test",
+    )
+    def test_rejects_conversation_owned_by_another_principal(
+        self, _resolve_url, redis_from_url
+    ):
+        client = redis_from_url.return_value
+        client.set.return_value = None
+        client.get.return_value = "another-owner"
+        history = ConversationHistory(
+            "principal-1",
+            "customer-1",
+            UUID("9015dbdd-608a-443e-8ddb-a142817ad9df"),
+        )
+
+        with self.assertRaises(ConversationOwnershipError):
+            history.claim_ownership()
+
+        history.close()
+
+    @patch("app.conversation_memory.Redis.from_url")
+    @patch(
+        "app.conversation_memory._resolve_redis_url",
+        return_value="redis://test",
+    )
+    def test_same_conversation_id_has_separate_customer_context(
+        self, _resolve_url, redis_from_url
+    ):
+        conversation_id = UUID("9015dbdd-608a-443e-8ddb-a142817ad9df")
+        first = ConversationHistory("principal-1", "customer-1", conversation_id)
+        second = ConversationHistory("principal-1", "customer-2", conversation_id)
+
+        self.assertNotEqual(first._key, second._key)
+
+        first.close()
+        second.close()
 
 
 if __name__ == "__main__":

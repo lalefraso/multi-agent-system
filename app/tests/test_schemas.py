@@ -25,6 +25,16 @@ class ChatSchemaTests(unittest.TestCase):
         with self.assertRaises(ValidationError):
             ChatRequest(message="Help", user_id="customer-123")
 
+    def test_accepts_customer_selection_as_untrusted_context(self):
+        request = ChatRequest(
+            message="Show my account details",
+            customer_id="customer-123",
+        )
+
+        self.assertEqual(request.customer_id, "customer-123")
+        with self.assertRaises(ValidationError):
+            ChatRequest(message="Help", customer_id=" customer-123 ")
+
     def test_tools_accept_their_required_inputs(self):
         knowledge = KnowledgeAgentInput(query="Help with a payment")
         self.assertEqual(knowledge.query, "Help with a payment")

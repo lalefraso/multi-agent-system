@@ -19,6 +19,7 @@ class ChatRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     message: str = Field(min_length=1, max_length=4000)
+    customer_id: str | None = Field(default=None, min_length=1, max_length=128)
     conversation_id: UUID | None = None
 
     @field_validator("message")
@@ -26,6 +27,13 @@ class ChatRequest(BaseModel):
     def reject_blank_values(cls, value: str) -> str:
         if not value.strip():
             raise ValueError("must not be blank")
+        return value
+
+    @field_validator("customer_id")
+    @classmethod
+    def reject_blank_customer_id(cls, value: str | None) -> str | None:
+        if value is not None and (not value.strip() or value != value.strip()):
+            raise ValueError("must not be blank or contain surrounding whitespace")
         return value
 
 

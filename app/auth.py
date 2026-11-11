@@ -24,8 +24,8 @@ class AuthenticationConfigurationError(RuntimeError):
 
 
 @dataclass(frozen=True)
-class AuthenticatedUser:
-    user_id: str
+class AuthenticatedPrincipal:
+    principal_id: str
 
 
 @dataclass(frozen=True)
@@ -33,7 +33,6 @@ class OIDCSettings:
     issuer: str
     audience: str
     jwks_url: str
-    user_id_claim: str
 
 
 def _require_https_url(name: str, value: str) -> str:
@@ -55,17 +54,14 @@ def _oidc_settings() -> OIDCSettings:
     issuer = os.getenv("OIDC_ISSUER", "").strip()
     audience = os.getenv("OIDC_AUDIENCE", "").strip()
     jwks_url = os.getenv("OIDC_JWKS_URL", "").strip()
-    user_id_claim = os.getenv("OIDC_USER_ID_CLAIM", "sub").strip()
-    if not issuer or not audience or not jwks_url or not user_id_claim:
+    if not issuer or not audience or not jwks_url:
         raise AuthenticationConfigurationError(
-            "Set OIDC_ISSUER, OIDC_AUDIENCE, OIDC_JWKS_URL, and "
-            "OIDC_USER_ID_CLAIM"
+            "Set OIDC_ISSUER, OIDC_AUDIENCE, and OIDC_JWKS_URL"
         )
     return OIDCSettings(
         issuer=_require_https_url("OIDC_ISSUER", issuer),
         audience=audience,
         jwks_url=_require_https_url("OIDC_JWKS_URL", jwks_url),
-        user_id_claim=user_id_claim,
     )
 
 
@@ -76,7 +72,7 @@ def _jwks_client(jwks_url: str) -> PyJWKClient:
 
 def require_authenticated_user(
     credentials: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
-) -> AuthenticatedUser:
+) -> AuthenticatedPrincipal:
     if credentials is None or credentials.scheme.lower() != "bearer":
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -124,10 +120,12 @@ def require_authenticated_user(
             headers={"WWW-Authenticate": "Bearer"},
         ) from exc
 
-    user_id = claims.get(settings.user_id_claim)
-    if not isinstance(user_id, str) or not user_id.strip() or len(user_id) > 128:
+    subject = claims.get("sub")
+    if not isinstance(subject, str) or not subject.strip() or len(subject) > 512:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="The authenticated identity has no valid customer mapping",
+            detail="The authenticated identity has no valid subject",
         )
-    return AuthenticatedUser(user_id=user_id)
+    return AuthenticatedPrincipal(
+        principal_id=f"{settings.issuer}\0{subject}"
+    )

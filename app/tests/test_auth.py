@@ -10,7 +10,7 @@ from fastapi.testclient import TestClient
 from fastapi.security import HTTPAuthorizationCredentials
 from jwt.exceptions import PyJWKClientConnectionError
 
-from app.auth import AuthenticatedUser, require_authenticated_user
+from app.auth import AuthenticatedPrincipal, require_authenticated_user
 from app.main import app
 
 
@@ -29,7 +29,6 @@ class AuthenticationTests(unittest.TestCase):
                 "OIDC_ISSUER": "https://identity.example/",
                 "OIDC_AUDIENCE": "getnet-api",
                 "OIDC_JWKS_URL": "https://identity.example/.well-known/jwks.json",
-                "OIDC_USER_ID_CLAIM": "customer_id",
             },
             clear=True,
         )
@@ -48,7 +47,6 @@ class AuthenticationTests(unittest.TestCase):
             "iss": "https://identity.example/",
             "aud": "getnet-api",
             "sub": "identity-subject-123",
-            "customer_id": "customer-123",
             "exp": int(time.time()) + 300,
         }
         claims.update(overrides)
@@ -57,10 +55,17 @@ class AuthenticationTests(unittest.TestCase):
     def _credentials(self, token):
         return HTTPAuthorizationCredentials(scheme="Bearer", credentials=token)
 
-    def test_derives_customer_identity_from_verified_claim(self):
-        user = require_authenticated_user(self._credentials(self._token()))
+    def test_derives_principal_from_verified_issuer_and_subject(self):
+        principal = require_authenticated_user(
+            self._credentials(self._token())
+        )
 
-        self.assertEqual(user, AuthenticatedUser(user_id="customer-123"))
+        self.assertEqual(
+            principal,
+            AuthenticatedPrincipal(
+                principal_id="https://identity.example/\0identity-subject-123"
+            ),
+        )
         self.mock_jwks_client.assert_called_once_with(
             "https://identity.example/.well-known/jwks.json"
         )
@@ -91,7 +96,6 @@ class AuthenticationTests(unittest.TestCase):
                 "iss": "https://identity.example/",
                 "aud": "getnet-api",
                 "sub": "identity-subject-123",
-                "customer_id": "customer-123",
                 "exp": int(time.time()) + 300,
             },
             other_key,
@@ -111,10 +115,10 @@ class AuthenticationTests(unittest.TestCase):
 
         self.assertEqual(raised.exception.status_code, 401)
 
-    def test_rejects_identity_without_customer_mapping(self):
+    def test_rejects_identity_without_subject(self):
         with self.assertRaises(HTTPException) as raised:
             require_authenticated_user(
-                self._credentials(self._token(customer_id=""))
+                self._credentials(self._token(sub=""))
             )
 
         self.assertEqual(raised.exception.status_code, 403)

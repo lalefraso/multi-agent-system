@@ -7,19 +7,32 @@ from fastapi import HTTPException
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
 from app.agents.router import _customer_support_tool
-from app.auth import AuthenticatedUser
+from app.auth import AuthenticatedPrincipal
+from app.authorization import (
+    CustomerNotAuthorizedError,
+    CustomerSelectionRequiredError,
+)
 from redis.exceptions import RedisError
 
 from app.main import chat
 from app.conversation_memory import (
     ConversationBusyError,
     ConversationMemoryError,
+    ConversationOwnershipError,
 )
 from app.customer_data import CustomerDataError, fetch_customer_data
 from app.schemas import AgentName, ChatRequest
 
 
 class CustomerDataTests(unittest.TestCase):
+    def setUp(self):
+        authorization = patch(
+            "app.main.authorize_customer_access",
+            return_value="customer-1",
+        )
+        self.authorize_customer = authorization.start()
+        self.addCleanup(authorization.stop)
+
     @patch("app.agents.router.fetch_customer_data", return_value='{"found":false}')
     def test_customer_tool_has_no_model_arguments(self, fetch_data):
         tool = _customer_support_tool("verified-customer-1")
@@ -90,8 +103,8 @@ class CustomerDataTests(unittest.TestCase):
         client = redis_from_url.return_value
         client.type.return_value = "string"
         client.get.return_value = (
-            '{"user_id":"customer-123","profile":{"USER_ID":"customer-123",'
-            '"account_status":"active"}}'
+            '{"user_id":"customer-123","profile":{"CUSTOMER_ID":"customer-123",'
+            '"merchant_id":"merchant-123","account_status":"active"}}'
         )
 
         result = fetch_customer_data("customer-123")
@@ -164,16 +177,24 @@ class CustomerDataTests(unittest.TestCase):
         }
 
         response = chat(
-            ChatRequest(message="Show my account details"),
-            AuthenticatedUser(user_id="cliente1988"),
+            ChatRequest(
+                message="Show my account details",
+                customer_id="customer-1",
+            ),
+            AuthenticatedPrincipal(principal_id="principal-1"),
         )
 
         self.assertEqual(response.answer, lookup_output)
         self.assertEqual(response.agents_used, [AgentName.CUSTOMER_SUPPORT])
         self.assertIsNotNone(response.conversation_id)
-        router_agent.assert_called_once_with("cliente1988")
+        self.authorize_customer.assert_called_once_with(
+            "principal-1", "customer-1"
+        )
+        router_agent.assert_called_once_with("customer-1")
         history.acquire_turn_lock.assert_called_once_with()
-        build_history.assert_called_once_with("cliente1988", response.conversation_id)
+        build_history.assert_called_once_with(
+            "principal-1", "customer-1", response.conversation_id
+        )
         history.save_turn.assert_called_once_with(
             "Show my account details",
             lookup_output,
@@ -203,7 +224,7 @@ class CustomerDataTests(unittest.TestCase):
                 message="Follow up",
                 conversation_id=conversation_id,
             ),
-            AuthenticatedUser(user_id="user-1"),
+            AuthenticatedPrincipal(principal_id="principal-1"),
         )
 
         self.assertEqual(response.conversation_id, conversation_id)
@@ -233,7 +254,7 @@ class CustomerDataTests(unittest.TestCase):
         with self.assertRaises(HTTPException) as raised:
             chat(
                 ChatRequest(message="Hello"),
-                AuthenticatedUser(user_id="user-1"),
+                AuthenticatedPrincipal(principal_id="principal-1"),
             )
 
         self.assertEqual(raised.exception.status_code, 503)
@@ -245,7 +266,7 @@ class CustomerDataTests(unittest.TestCase):
         with self.assertRaises(HTTPException) as raised:
             chat(
                 ChatRequest(message="Hello"),
-                AuthenticatedUser(user_id="user-1"),
+                AuthenticatedPrincipal(principal_id="principal-1"),
             )
 
         self.assertEqual(raised.exception.status_code, 429)
@@ -269,13 +290,71 @@ class CustomerDataTests(unittest.TestCase):
                     message="Follow up",
                     conversation_id=UUID("9015dbdd-608a-443e-8ddb-a142817ad9df"),
                 ),
-                AuthenticatedUser(user_id="user-1"),
+                AuthenticatedPrincipal(principal_id="principal-1"),
             )
 
         self.assertEqual(raised.exception.status_code, 409)
         history.load_context.assert_not_called()
         history.close.assert_called_once_with()
         router_agent.return_value.invoke.assert_not_called()
+
+    @patch("app.main._router_agent")
+    def test_chat_rejects_customer_selection_without_membership(
+        self, router_agent
+    ):
+        self.authorize_customer.side_effect = CustomerNotAuthorizedError
+
+        with self.assertRaises(HTTPException) as raised:
+            chat(
+                ChatRequest(
+                    message="Show my account details",
+                    customer_id="someone-elses-customer",
+                ),
+                AuthenticatedPrincipal(principal_id="principal-1"),
+            )
+
+        self.assertEqual(raised.exception.status_code, 404)
+        router_agent.assert_not_called()
+
+    @patch("app.main._router_agent")
+    def test_chat_requires_customer_selection_for_multiple_memberships(
+        self, router_agent
+    ):
+        self.authorize_customer.side_effect = CustomerSelectionRequiredError
+
+        with self.assertRaises(HTTPException) as raised:
+            chat(
+                ChatRequest(message="Show my account details"),
+                AuthenticatedPrincipal(principal_id="principal-1"),
+            )
+
+        self.assertEqual(raised.exception.status_code, 400)
+        router_agent.assert_not_called()
+
+    @patch("app.main.build_conversation_history")
+    @patch("app.main._router_agent")
+    def test_chat_rejects_conversation_owned_by_another_principal(
+        self, router_agent, build_history
+    ):
+        history = Mock()
+        history.claim_ownership.side_effect = ConversationOwnershipError
+        build_history.return_value = history
+
+        with self.assertRaises(HTTPException) as raised:
+            chat(
+                ChatRequest(
+                    message="Follow up",
+                    conversation_id=UUID(
+                        "9015dbdd-608a-443e-8ddb-a142817ad9df"
+                    ),
+                ),
+                AuthenticatedPrincipal(principal_id="principal-1"),
+            )
+
+        self.assertEqual(raised.exception.status_code, 404)
+        history.load_context.assert_not_called()
+        history.close.assert_called_once_with()
+        router_agent.assert_not_called()
 
 
 if __name__ == "__main__":

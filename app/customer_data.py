@@ -15,19 +15,19 @@ class CustomerDataError(RuntimeError):
     """Raised when customer data cannot be retrieved from Redis."""
 
 
-def _redact_user_id(value: object) -> object:
+def _redact_identity_fields(value: object) -> object:
     if isinstance(value, dict):
         return {
-            key: _redact_user_id(item)
+            key: _redact_identity_fields(item)
             for key, item in value.items()
-            if key.casefold() != "user_id"
+            if key.casefold() not in {"user_id", "customer_id", "merchant_id"}
         }
     if isinstance(value, list):
-        return [_redact_user_id(item) for item in value]
+        return [_redact_identity_fields(item) for item in value]
     return value
 
 
-def fetch_customer_data(user_id: str) -> str:
+def fetch_customer_data(customer_id: str) -> str:
     try:
         redis_url = _resolve_redis_url()
     except RedisStoreError as exc:
@@ -37,7 +37,7 @@ def fetch_customer_data(user_id: str) -> str:
         client = Redis.from_url(redis_url, decode_responses=True)
     except (RedisError, ValueError) as exc:
         raise CustomerDataError("Could not configure the Redis connection") from exc
-    key = f"{CUSTOMER_KEY_PREFIX}{user_id}"
+    key = f"{CUSTOMER_KEY_PREFIX}{customer_id}"
     try:
         record_type = client.type(key)
         if isinstance(record_type, bytes):
@@ -68,5 +68,5 @@ def fetch_customer_data(user_id: str) -> str:
         client.close()
 
     return json.dumps(
-        _redact_user_id(record), ensure_ascii=False, sort_keys=True
+        _redact_identity_fields(record), ensure_ascii=False, sort_keys=True
     )

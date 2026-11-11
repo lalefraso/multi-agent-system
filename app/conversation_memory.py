@@ -16,6 +16,7 @@ CONVERSATION_LOCK_TTL_SECONDS = 15 * 60
 CONVERSATION_LOCK_WAIT_SECONDS = 5
 MAX_CONTEXT_MESSAGES = 20
 HISTORY_KEY_PREFIX = "getnet:chat:"
+CONVERSATION_OWNER_PREFIX = "getnet:conversation-owner:"
 
 
 class ConversationMemoryError(RuntimeError):
@@ -26,13 +27,23 @@ class ConversationBusyError(RuntimeError):
     """Raised when another request is already handling this conversation."""
 
 
-def _session_id(user_id: str, conversation_id: UUID) -> str:
-    identity = f"{user_id}\0{conversation_id}".encode("utf-8")
+class ConversationOwnershipError(RuntimeError):
+    """Raised when a principal does not own the requested conversation."""
+
+
+def _session_id(
+    principal_id: str, customer_id: str, conversation_id: UUID
+) -> str:
+    identity = (
+        f"{principal_id}\0{customer_id}\0{conversation_id}".encode("utf-8")
+    )
     return hashlib.sha256(identity).hexdigest()
 
 
 class ConversationHistory:
-    def __init__(self, user_id: str, conversation_id: UUID) -> None:
+    def __init__(
+        self, principal_id: str, customer_id: str, conversation_id: UUID
+    ) -> None:
         try:
             redis_url = _resolve_redis_url()
         except RedisStoreError as exc:
@@ -42,9 +53,15 @@ class ConversationHistory:
             self._client = Redis.from_url(
                 redis_url, decode_responses=True
             )
-            self._user_id = user_id
+            self._customer_id = customer_id
+            owner_identity = f"{principal_id}\0{customer_id}".encode("utf-8")
+            self._owner_token = hashlib.sha256(owner_identity).hexdigest()
+            self._owner_key = (
+                f"{CONVERSATION_OWNER_PREFIX}{conversation_id}"
+            )
             self._key = (
-                f"{HISTORY_KEY_PREFIX}{_session_id(user_id, conversation_id)}"
+                f"{HISTORY_KEY_PREFIX}"
+                f"{_session_id(principal_id, customer_id, conversation_id)}"
             )
             self._turn_lock = None
         except (RedisError, ValueError) as exc:
@@ -75,7 +92,9 @@ class ConversationHistory:
                     item.get("content"), str
                 ):
                     raise ValueError("Invalid conversation message")
-                content = item["content"].replace(self._user_id, "[redacted]")
+                content = item["content"].replace(
+                    self._customer_id, "[redacted]"
+                )
                 if item.get("type") == "human":
                     try:
                         legacy_request = json.loads(content)
@@ -96,6 +115,27 @@ class ConversationHistory:
                 "Could not decode Redis conversation history"
             ) from exc
         return messages
+
+    def claim_ownership(self) -> None:
+        try:
+            claimed = self._client.set(
+                self._owner_key,
+                self._owner_token,
+                nx=True,
+                ex=CONVERSATION_TTL_SECONDS,
+            )
+            if claimed:
+                return
+            owner = self._client.get(self._owner_key)
+            if owner != self._owner_token:
+                raise ConversationOwnershipError
+            self._client.expire(self._owner_key, CONVERSATION_TTL_SECONDS)
+        except ConversationOwnershipError:
+            raise
+        except RedisError as exc:
+            raise ConversationMemoryError(
+                "Could not verify Redis conversation ownership"
+            ) from exc
 
     def acquire_turn_lock(self) -> None:
         try:
@@ -118,12 +158,17 @@ class ConversationHistory:
 
     def save_turn(self, user_message: str, answer: str) -> None:
         try:
-            self._client.rpush(
-                self._key,
-                json.dumps({"type": "human", "content": user_message}),
-                json.dumps({"type": "ai", "content": answer}),
-            )
-            self._client.expire(self._key, CONVERSATION_TTL_SECONDS)
+            with self._client.pipeline(transaction=True) as transaction:
+                transaction.rpush(
+                    self._key,
+                    json.dumps({"type": "human", "content": user_message}),
+                    json.dumps({"type": "ai", "content": answer}),
+                )
+                transaction.expire(self._key, CONVERSATION_TTL_SECONDS)
+                transaction.expire(
+                    self._owner_key, CONVERSATION_TTL_SECONDS
+                )
+                transaction.execute()
         except RedisError as exc:
             raise ConversationMemoryError(
                 "Could not store Redis conversation history"
@@ -151,6 +196,6 @@ class ConversationHistory:
 
 
 def build_conversation_history(
-    user_id: str, conversation_id: UUID
+    principal_id: str, customer_id: str, conversation_id: UUID
 ) -> ConversationHistory:
-    return ConversationHistory(user_id, conversation_id)
+    return ConversationHistory(principal_id, customer_id, conversation_id)
