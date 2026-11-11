@@ -38,9 +38,12 @@ The knowledge agent has its own two-tool boundary: `vector_search` queries the
 existing `idx:getnet` index with the same multilingual E5 model and `query: `
 prefix used by ingestion, and `external_resource_search` uses Tavily Extract.
 Knowledge answers are concise and grounded only in retrieved sources. Similar
-product names are treated as candidates, not assumed aliases; comparisons
-search for each product and report when the sources do not establish a
-difference.
+product names are treated as candidates, not assumed aliases. The vector
+search also runs a targeted English lookup when it sees "Get Clássica",
+"Get Clasica", or "Get Classic", since Get Classic appears in the English
+corpus; this retrieves a candidate without assuming the names are equivalent.
+Comparisons search for each product and report when the sources do not
+establish a difference.
 Add exact HTTPS page URLs to `[knowledge].allowed_urls` in `settings.toml`.
 External lookup stays disabled while the list is empty; it never accepts a URL
 from the user's query, passes only configured URLs to Tavily, and filters

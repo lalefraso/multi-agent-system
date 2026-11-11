@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import struct
 import tomllib
 from functools import lru_cache
@@ -130,6 +131,24 @@ def _decode_field(value: Any) -> str | None:
     return None
 
 
+def _records_from_search_response(response: Any) -> list[dict[str, Any]]:
+    records: list[dict[str, Any]] = []
+    for document in response.docs:
+        record = {
+            field: _decode_field(getattr(document, field, None))
+            for field in SEARCH_RESULT_FIELDS
+            if field != "score"
+        }
+        document_key = _decode_field(getattr(document, "id", None))
+        if document_key and document_key.startswith(DEFAULT_PREFIX):
+            record["id"] = document_key.removeprefix(DEFAULT_PREFIX)
+        raw_score = getattr(document, "score", None)
+        if raw_score is not None:
+            record["similarity"] = 1.0 - float(raw_score)
+        records.append(record)
+    return records
+
+
 def search_vector_records(query_text: str, result_count: int | None = None) -> list[dict[str, Any]]:
     settings = _knowledge_settings()
     count = (
@@ -174,20 +193,7 @@ def search_vector_records(query_text: str, result_count: int | None = None) -> l
             search_query,
             query_params={"vector": vector_bytes},
         )
-        records: list[dict[str, Any]] = []
-        for document in response.docs:
-            record = {
-                field: _decode_field(getattr(document, field, None))
-                for field in SEARCH_RESULT_FIELDS
-                if field != "score"
-            }
-            document_key = _decode_field(getattr(document, "id", None))
-            if document_key and document_key.startswith(DEFAULT_PREFIX):
-                record["id"] = document_key.removeprefix(DEFAULT_PREFIX)
-            raw_score = getattr(document, "score", None)
-            if raw_score is not None:
-                record["similarity"] = 1.0 - float(raw_score)
-            records.append(record)
+        records = _records_from_search_response(response)
         LOGGER.info(
             "Vector search on index %s returned %d results",
             index_name,
@@ -200,11 +206,80 @@ def search_vector_records(query_text: str, result_count: int | None = None) -> l
         client.close()
 
 
+def _search_product_name_records(
+    product_name: str,
+    result_count: int,
+) -> list[dict[str, Any]]:
+    index_name = _knowledge_settings().get("vector_index", DEFAULT_INDEX)
+    search_query = (
+        Query(
+            f"@page_title:({product_name}) | "
+            f"@section_heading:({product_name})"
+        )
+        .return_fields(*SEARCH_RESULT_FIELDS)
+        .paging(0, result_count)
+        .dialect(2)
+    )
+    load_dotenv(ENV_FILE, override=False)
+    client = Redis.from_url(_resolve_redis_url())
+    try:
+        response = client.ft(index_name).search(search_query)
+        records = _records_from_search_response(response)
+        LOGGER.info(
+            "Exact product-name search on index %s returned %d results",
+            index_name,
+            len(records),
+        )
+        return records
+    except RedisError as exc:
+        raise RuntimeError(f"Getnet product-name search failed: {exc}") from exc
+    finally:
+        client.close()
+
+
 @tool("vector_search", args_schema=VectorSearchInput)
 def vector_search(query: str, result_count: int | None = None) -> str:
     """Search the Getnet Redis vector index for relevant product information."""
+    search_count = (
+        _knowledge_settings().get("vector_result_count", 5)
+        if result_count is None
+        else result_count
+    )
+    results = search_vector_records(query, search_count)
+
+    if re.search(r"\bget\s+(?:clássica|clasica|classic)\b", query, re.IGNORECASE):
+        candidate_name = "Get Classic"
+        candidate_results = _search_product_name_records(candidate_name, search_count)
+        seen = {
+            record.get("id")
+            or (record.get("url"), record.get("section_heading"), record.get("text"))
+            for record in results
+        }
+        for record in candidate_results:
+            identity = (
+                record.get("id")
+                or (record.get("url"), record.get("section_heading"), record.get("text"))
+            )
+            if identity not in seen:
+                results.append(record)
+                seen.add(identity)
+
+        def result_order(record: dict[str, Any]) -> tuple[bool, float]:
+            searchable_text = " ".join(
+                str(record.get(field) or "")
+                for field in ("page_title", "section_heading", "text")
+            ).casefold()
+            similarity = record.get("similarity")
+            return (
+                candidate_name.casefold() not in searchable_text,
+                -float(similarity) if similarity is not None else 0.0,
+            )
+
+        results.sort(key=result_order)
+        results = results[:search_count]
+
     return json.dumps(
-        search_vector_records(query, result_count),
+        results,
         ensure_ascii=False,
     )
 

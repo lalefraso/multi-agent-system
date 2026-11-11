@@ -1,3 +1,4 @@
+import json
 import struct
 import unittest
 from types import SimpleNamespace
@@ -10,6 +11,7 @@ from app.agents.knowledge import (
     knowledge_agent,
     search_external_resources,
     search_vector_records,
+    vector_search,
 )
 
 
@@ -24,6 +26,47 @@ class KnowledgeSearchTests(unittest.TestCase):
             "based only on a search in one language\nor one query.",
             KNOWLEDGE_SYSTEM_PROMPT,
         )
+
+    @patch("app.agents.knowledge._search_product_name_records")
+    @patch("app.agents.knowledge.search_vector_records")
+    def test_vector_search_retrieves_candidate_for_cross_language_product_name(
+        self, search_records, search_product_name_records
+    ):
+        search_records.return_value = [
+            {
+                "id": "get-mini",
+                "section_heading": "Get Mini",
+                "similarity": 0.9,
+            },
+            {
+                "id": "get-smart",
+                "section_heading": "Get Smart",
+                "similarity": 0.85,
+            },
+        ]
+        search_product_name_records.return_value = [
+            {
+                "id": "get-classic",
+                "section_heading": "Get Classic",
+                "url": "https://www.getnet.net/en/our-solutions/in-person-payments",
+            }
+        ]
+
+        result = vector_search.invoke(
+            {
+                "query": "¿Cuál es la diferencia entre Get Clássica y Get Smart?",
+                "result_count": 5,
+            }
+        )
+
+        records = json.loads(result)
+        self.assertEqual(records[0]["id"], "get-classic")
+        self.assertIn("get-smart", [record["id"] for record in records])
+        search_records.assert_called_once_with(
+            "¿Cuál es la diferencia entre Get Clássica y Get Smart?",
+            5,
+        )
+        search_product_name_records.assert_called_once_with("Get Classic", 5)
 
     def test_normalizes_urls_without_relaxing_path_allowlist(self):
         self.assertEqual(
