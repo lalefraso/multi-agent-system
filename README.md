@@ -67,6 +67,22 @@ required if customer records are stored as RedisJSON. History read/write
 failures return HTTP 503 rather than silently starting a conversation without
 memory.
 
+The API limits concurrent chat requests per process with a non-blocking
+semaphore. Set `CHAT_MAX_CONCURRENT_REQUESTS` in `.env` (default: `8`); requests
+over the limit receive HTTP 429 and a `Retry-After` header. The effective
+instance limit is this value multiplied by the number of Uvicorn workers. For
+example, 4 workers with a limit of 8 allow up to 32 simultaneous requests on
+that instance. This is a per-process limit, not a global quota across multiple
+instances; keep the combined limit within the LLM provider's rate and token
+quotas.
+
+Requests for the same conversation acquire a Redis lock before loading history
+and hold it through the agent response and history write. This serializes turns
+across workers and replicas sharing Redis. If the lock cannot be acquired
+within 5 seconds, the API returns HTTP 409 so the client can retry shortly.
+Locks expire after 15 minutes if a worker terminates unexpectedly; keep the
+maximum request duration below that lease time.
+
 ## Configuration and run
 
 Create `.env` from [`.env.example`](./.env.example), then set the API key for

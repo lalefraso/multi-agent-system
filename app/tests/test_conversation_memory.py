@@ -6,9 +6,12 @@ from langchain_core.messages import AIMessage, HumanMessage
 from redis.exceptions import RedisError
 
 from app.conversation_memory import (
+    CONVERSATION_LOCK_TTL_SECONDS,
+    CONVERSATION_LOCK_WAIT_SECONDS,
     CONVERSATION_TTL_SECONDS,
     HISTORY_KEY_PREFIX,
     MAX_CONTEXT_MESSAGES,
+    ConversationBusyError,
     ConversationHistory,
     ConversationMemoryError,
     _session_id,
@@ -77,6 +80,51 @@ class ConversationHistoryTests(unittest.TestCase):
         client.expire.assert_called_once_with(
             history._key, CONVERSATION_TTL_SECONDS
         )
+        history.close()
+
+    @patch("app.conversation_memory.Redis.from_url")
+    @patch(
+        "app.conversation_memory._resolve_redis_url",
+        return_value="redis://test",
+    )
+    def test_acquires_and_releases_lock_for_scoped_conversation(
+        self, _resolve_url, redis_from_url
+    ):
+        conversation_id = UUID("9015dbdd-608a-443e-8ddb-a142817ad9df")
+        history = ConversationHistory("user-1", conversation_id)
+
+        history.acquire_turn_lock()
+        redis_from_url.return_value.lock.assert_called_once_with(
+            f"{history._key}:lock",
+            timeout=CONVERSATION_LOCK_TTL_SECONDS,
+            blocking_timeout=CONVERSATION_LOCK_WAIT_SECONDS,
+        )
+        redis_from_url.return_value.lock.return_value.acquire.assert_called_once_with(
+            blocking=True
+        )
+
+        history.release_turn_lock()
+
+        redis_from_url.return_value.lock.return_value.release.assert_called_once_with()
+        history.close()
+
+    @patch("app.conversation_memory.Redis.from_url")
+    @patch(
+        "app.conversation_memory._resolve_redis_url",
+        return_value="redis://test",
+    )
+    def test_reports_busy_conversation_when_lock_wait_times_out(
+        self, _resolve_url, redis_from_url
+    ):
+        redis_from_url.return_value.lock.return_value.acquire.return_value = False
+        history = ConversationHistory(
+            "user-1", UUID("9015dbdd-608a-443e-8ddb-a142817ad9df")
+        )
+
+        with self.assertRaisesRegex(ConversationBusyError, "retry shortly"):
+            history.acquire_turn_lock()
+
+        history.release_turn_lock()
         history.close()
 
     @patch("app.conversation_memory.Redis.from_url")

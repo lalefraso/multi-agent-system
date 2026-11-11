@@ -12,12 +12,18 @@ from getnet_ingestion.redis_store import RedisStoreError, _resolve_redis_url
 
 
 CONVERSATION_TTL_SECONDS = 30 * 24 * 60 * 60
+CONVERSATION_LOCK_TTL_SECONDS = 15 * 60
+CONVERSATION_LOCK_WAIT_SECONDS = 5
 MAX_CONTEXT_MESSAGES = 20
 HISTORY_KEY_PREFIX = "getnet:chat:"
 
 
 class ConversationMemoryError(RuntimeError):
     """Raised when conversation history cannot be read or stored."""
+
+
+class ConversationBusyError(RuntimeError):
+    """Raised when another request is already handling this conversation."""
 
 
 def _session_id(user_id: str, conversation_id: UUID) -> str:
@@ -39,6 +45,7 @@ class ConversationHistory:
             self._key = (
                 f"{HISTORY_KEY_PREFIX}{_session_id(user_id, conversation_id)}"
             )
+            self._turn_lock = None
         except (RedisError, ValueError) as exc:
             client = getattr(self, "_client", None)
             if client is not None:
@@ -79,6 +86,25 @@ class ConversationHistory:
             ) from exc
         return messages
 
+    def acquire_turn_lock(self) -> None:
+        try:
+            self._turn_lock = self._client.lock(
+                f"{self._key}:lock",
+                timeout=CONVERSATION_LOCK_TTL_SECONDS,
+                blocking_timeout=CONVERSATION_LOCK_WAIT_SECONDS,
+            )
+            acquired = self._turn_lock.acquire(blocking=True)
+        except RedisError as exc:
+            self._turn_lock = None
+            raise ConversationMemoryError(
+                "Could not acquire Redis conversation lock"
+            ) from exc
+        if not acquired:
+            self._turn_lock = None
+            raise ConversationBusyError(
+                "This conversation is processing another request; retry shortly."
+            )
+
     def save_turn(self, user_message: str, answer: str) -> None:
         try:
             self._client.rpush(
@@ -90,6 +116,18 @@ class ConversationHistory:
         except RedisError as exc:
             raise ConversationMemoryError(
                 "Could not store Redis conversation history"
+            ) from exc
+
+    def release_turn_lock(self) -> None:
+        if self._turn_lock is None:
+            return
+        turn_lock = self._turn_lock
+        self._turn_lock = None
+        try:
+            turn_lock.release()
+        except RedisError as exc:
+            raise ConversationMemoryError(
+                "Could not release Redis conversation lock"
             ) from exc
 
     def close(self) -> None:

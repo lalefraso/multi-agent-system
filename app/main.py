@@ -1,14 +1,22 @@
 from __future__ import annotations
 
+import os
 from functools import lru_cache
+from pathlib import Path
+from threading import BoundedSemaphore
 from uuid import uuid4
 
+from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, status
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+
+ENV_FILE = Path(__file__).resolve().parents[1] / ".env"
+load_dotenv(ENV_FILE, override=False)
 
 from app.agents.router import build_router_agent
 from app.customer_data import CustomerDataError
 from app.conversation_memory import (
+    ConversationBusyError,
     ConversationMemoryError,
     build_conversation_history,
 )
@@ -20,6 +28,23 @@ from app.schemas import (
     ChatResponse,
     ErrorResponse,
 )
+
+
+def _positive_int_setting(name: str, default: int) -> int:
+    value = os.getenv(name)
+    try:
+        parsed = default if value is None else int(value)
+    except ValueError as exc:
+        raise ValueError(f"{name} must be a positive integer") from exc
+    if parsed < 1:
+        raise ValueError(f"{name} must be a positive integer")
+    return parsed
+
+
+MAX_CONCURRENT_CHATS = _positive_int_setting(
+    "CHAT_MAX_CONCURRENT_REQUESTS", 8
+)
+_chat_slots = BoundedSemaphore(MAX_CONCURRENT_CHATS)
 
 
 app = FastAPI(title="Getnet Multi-Agent API", version="0.1.0")
@@ -56,9 +81,26 @@ def health() -> dict[str, str]:
 @app.post(
     "/chat",
     response_model=ChatResponse,
-    responses={503: {"model": ErrorResponse}},
+    responses={
+        409: {"model": ErrorResponse},
+        429: {"model": ErrorResponse},
+        503: {"model": ErrorResponse},
+    },
 )
 def chat(request: ChatRequest) -> ChatResponse:
+    if not _chat_slots.acquire(blocking=False):
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="The service is handling its maximum number of chat requests.",
+            headers={"Retry-After": "1"},
+        )
+    try:
+        return _process_chat(request)
+    finally:
+        _chat_slots.release()
+
+
+def _process_chat(request: ChatRequest) -> ChatResponse:
     conversation_id = request.conversation_id or uuid4()
     user_message = request.model_dump_json(include={"message", "user_id"})
     try:
@@ -77,6 +119,7 @@ def chat(request: ChatRequest) -> ChatResponse:
 
     try:
         try:
+            history.acquire_turn_lock()
             messages = history.load_context()
             messages.append(HumanMessage(content=user_message))
             result = router_agent.invoke({"messages": messages})
@@ -112,7 +155,16 @@ def chat(request: ChatRequest) -> ChatResponse:
 
             history.save_turn(user_message, answer)
         finally:
-            history.close()
+            try:
+                history.release_turn_lock()
+            finally:
+                history.close()
+    except ConversationBusyError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=str(exc),
+            headers={"Retry-After": "1"},
+        ) from exc
     except ConversationMemoryError as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,

@@ -8,7 +8,10 @@ from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from redis.exceptions import RedisError
 
 from app.main import chat
-from app.conversation_memory import ConversationMemoryError
+from app.conversation_memory import (
+    ConversationBusyError,
+    ConversationMemoryError,
+)
 from app.customer_data import CustomerDataError, fetch_customer_data
 from app.schemas import AgentName, ChatRequest
 
@@ -140,11 +143,13 @@ class CustomerDataTests(unittest.TestCase):
         self.assertEqual(response.answer, lookup_output)
         self.assertEqual(response.agents_used, [AgentName.CUSTOMER_SUPPORT])
         self.assertIsNotNone(response.conversation_id)
+        history.acquire_turn_lock.assert_called_once_with()
         build_history.assert_called_once_with("cliente1988", response.conversation_id)
         history.save_turn.assert_called_once_with(
             '{"message":"Show my account details","user_id":"cliente1988"}',
             lookup_output,
         )
+        history.release_turn_lock.assert_called_once_with()
         history.close.assert_called_once_with()
 
     @patch("app.main.build_conversation_history")
@@ -202,6 +207,42 @@ class CustomerDataTests(unittest.TestCase):
             chat(ChatRequest(message="Hello", user_id="user-1"))
 
         self.assertEqual(raised.exception.status_code, 503)
+
+    @patch("app.main._chat_slots")
+    def test_chat_rejects_requests_over_the_concurrency_limit(self, chat_slots):
+        chat_slots.acquire.return_value = False
+
+        with self.assertRaises(HTTPException) as raised:
+            chat(ChatRequest(message="Hello", user_id="user-1"))
+
+        self.assertEqual(raised.exception.status_code, 429)
+        self.assertEqual(raised.exception.headers["Retry-After"], "1")
+        chat_slots.release.assert_not_called()
+
+    @patch("app.main.build_conversation_history")
+    @patch("app.main._router_agent")
+    def test_chat_returns_conflict_when_conversation_is_busy(
+        self, router_agent, build_history
+    ):
+        history = Mock()
+        history.acquire_turn_lock.side_effect = ConversationBusyError(
+            "This conversation is busy"
+        )
+        build_history.return_value = history
+
+        with self.assertRaises(HTTPException) as raised:
+            chat(
+                ChatRequest(
+                    message="Follow up",
+                    user_id="user-1",
+                    conversation_id=UUID("9015dbdd-608a-443e-8ddb-a142817ad9df"),
+                )
+            )
+
+        self.assertEqual(raised.exception.status_code, 409)
+        history.load_context.assert_not_called()
+        history.close.assert_called_once_with()
+        router_agent.return_value.invoke.assert_not_called()
 
 
 if __name__ == "__main__":
