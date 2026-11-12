@@ -1,7 +1,7 @@
 import time
 import unittest
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import jwt
 from cryptography.hazmat.primitives.asymmetric import rsa
@@ -148,6 +148,29 @@ class AuthenticationTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 401)
         self.assertEqual(response.headers["www-authenticate"], "Bearer")
+
+    def test_operator_endpoint_requires_membership_after_jwt_validation(self):
+        redis = Mock()
+        redis.sismember.return_value = False
+        headers = {"Authorization": f"Bearer {self._token()}"}
+        with patch("app.operator_authorization._client", return_value=redis):
+            response = TestClient(app).get("/operator/escalations", headers=headers)
+        self.assertEqual(response.status_code, 403)
+        redis.sismember.assert_called_once()
+
+    def test_operator_endpoint_accepts_valid_token_and_operator_membership(self):
+        authorization_client = Mock()
+        authorization_client.sismember.return_value = True
+        headers = {"Authorization": f"Bearer {self._token()}"}
+        with (
+            patch("app.operator_authorization._client", return_value=authorization_client),
+            patch("app.operator_api._resolve_redis_url", return_value="redis://test"),
+            patch("app.operator_api.Redis.from_url"),
+            patch("app.operator_api.list_escalations", return_value=[]),
+        ):
+            response = TestClient(app).get("/operator/escalations", headers=headers)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {"items": [], "next_offset": None})
 
 
 if __name__ == "__main__":

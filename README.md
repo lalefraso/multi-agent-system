@@ -159,14 +159,57 @@ and mismatched ownership returns HTTP 404. Case creation is idempotent per
 conversation. The escalation itself contains the summary rather than a full
 conversation snapshot; the summarizer only sees the recent conversation context.
 The triggering message is not separately added to the conversation history.
-There is currently **no operator endpoint, notification, assignment, or live
-handoff**. A pending case does not mean that a person has received or reviewed
-it. If storing it fails, `/chat` returns HTTP 503 rather than confirming success.
+There is currently no notification, reply delivery, or live handoff. A pending
+case does not mean that a person has received or reviewed it. If storing it
+fails, `/chat` returns HTTP 503 rather than confirming success.
+
+### Operator API
+
+Operators authenticate with the same OIDC issuer and audience as `/chat`, but
+authentication alone does not grant operator access. A trusted administrator
+must provision the exact issuer and subject in the Redis operator allowlist:
+
+```bash
+python -m app.manage_operators grant \
+  --issuer 'https://issuer.example/' --subject 'operator-subject'
+python -m app.manage_operators revoke \
+  --issuer 'https://issuer.example/' --subject 'operator-subject'
+```
+
+Only trusted administrators may change `getnet:authz:operators`; entries are
+SHA-256 hashes of `issuer + NUL + subject`, not bearer tokens. Revocation prevents
+subsequent requests, but does not reassign existing cases. If an assigned
+operator loses access, an administrator must restore that operator's access
+until a reassignment workflow is implemented. An unauthorized user receives
+HTTP 403; unavailable authorization storage returns HTTP 503.
+
+With an authorized operator token:
+
+- `GET /operator/escalations?status=pending&limit=20&offset=0` lists cases
+  oldest first, with `next_offset` for pagination. `status` may be `pending`,
+  `taken`, or `closed` and defaults to `pending`.
+- `GET /operator/escalations/{escalation_id}` returns the customer and
+  conversation identifiers, summary, reason, status, timestamps and
+  `assigned_to` (the hash of the assigned operator's verified identity).
+  `conversation`, `proposed_action` and `sources` are `null`: they were not
+  stored and must not be interpreted as a complete conversation or action.
+- `PATCH /operator/escalations/{escalation_id}/status` accepts
+  `{"status":"taken"}` or `{"status":"closed"}`. Taking a pending case
+  assigns the authenticated operator; only that operator can close it.
+  Repeating the same successful transition by that operator is idempotent.
+  Other transitions return HTTP 409. Concurrent updates are checked atomically.
+  Closing changes the status only; it does not send a reply or reopen chat.
+
+Case lookup and listing scan Redis records so existing cases need no migration.
+This is suitable for the current prototype, not a high-volume queue: each
+request scans records, and offset pagination can skip or repeat items when
+cases change between requests. A production queue needs durable indexes and
+stable pagination. There is no one-hour SLA, automatic timeout or alert yet.
 
 The summary prompt requests omission of secrets and unnecessary personal data,
 but model-generated summaries are not guaranteed to be sanitized. Before
-production, add validated redaction, operator access controls, retention and
-deletion policies, backups, and monitoring. The Compose Redis enables AOF with
+production, add validated redaction, fine-grained operator permissions and audit,
+retention and deletion policies, backups, and monitoring. The Compose Redis enables AOF with
 `appendfsync everysec` on the `redis-data` volume: a crash can still lose up to
 approximately one second of writes, and volume loss is not protected. Other
 Redis deployments must configure their own appropriate persistence and recovery.

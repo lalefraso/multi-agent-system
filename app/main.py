@@ -39,6 +39,7 @@ from app.conversation_memory import (
     build_conversation_history,
 )
 from app.llm import LLMConfigurationError, check_llm_configuration
+from app.operator_api import router as operator_router
 from app.schemas import (
     AgentName,
     AgentStatus,
@@ -73,6 +74,7 @@ _chat_slots = BoundedSemaphore(MAX_CONCURRENT_CHATS)
 
 
 app = FastAPI(title="Getnet Multi-Agent API", version="0.1.0")
+app.include_router(operator_router)
 
 
 def _router_agent(customer_id: str):
