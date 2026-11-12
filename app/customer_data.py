@@ -6,9 +6,10 @@ from redis import Redis
 from redis.exceptions import RedisError
 
 from getnet_ingestion.redis_store import RedisStoreError, _resolve_redis_url
-
-
-CUSTOMER_KEY_PREFIX = "getnet_users:customer:"
+from getnet_ingestion.schema import (
+    CUSTOMER_KEY_PREFIX,
+    LEGACY_CUSTOMER_KEY_PREFIX,
+)
 
 
 class CustomerDataError(RuntimeError):
@@ -42,6 +43,13 @@ def fetch_customer_data(customer_id: str) -> str:
         record_type = client.type(key)
         if isinstance(record_type, bytes):
             record_type = record_type.decode("utf-8")
+
+        if record_type == "none":
+            legacy_key = f"{LEGACY_CUSTOMER_KEY_PREFIX}{customer_id}"
+            record_type = client.type(legacy_key)
+            if isinstance(record_type, bytes):
+                record_type = record_type.decode("utf-8")
+            key = legacy_key
 
         if record_type == "none":
             record: object = {"found": False}

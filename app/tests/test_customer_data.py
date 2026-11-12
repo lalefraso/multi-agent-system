@@ -61,10 +61,10 @@ class CustomerDataTests(unittest.TestCase):
             "redis://test", decode_responses=True
         )
         client.type.assert_called_once_with(
-            "getnet_users:customer:cliente1988"
+            "customers:customer:cliente1988"
         )
         client.hgetall.assert_called_once_with(
-            "getnet_users:customer:cliente1988"
+            "customers:customer:cliente1988"
         )
         client.close.assert_called_once_with()
 
@@ -91,7 +91,28 @@ class CustomerDataTests(unittest.TestCase):
 
         self.assertEqual(json.loads(result), {"account_status": "active"})
         client.json.return_value.get.assert_called_once_with(
-            "getnet_users:customer:cliente1988"
+            "customers:customer:cliente1988"
+        )
+        client.close.assert_called_once_with()
+
+    @patch("app.customer_data.Redis.from_url")
+    @patch("app.customer_data._resolve_redis_url", return_value="redis://test")
+    def test_reads_legacy_customer_key_when_new_key_is_missing(
+        self, _resolve_url, redis_from_url
+    ):
+        client = redis_from_url.return_value
+        client.type.side_effect = ["none", "string"]
+        client.get.return_value = '{"account_status":"active"}'
+
+        result = fetch_customer_data("cliente1988")
+
+        self.assertEqual(json.loads(result), {"account_status": "active"})
+        self.assertEqual(
+            [call.args[0] for call in client.type.call_args_list],
+            [
+                "customers:customer:cliente1988",
+                "getnet_users:customer:cliente1988",
+            ],
         )
         client.close.assert_called_once_with()
 

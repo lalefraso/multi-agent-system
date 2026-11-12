@@ -1,9 +1,24 @@
 services:
+  redis-seed:
+    build: .
+    command: ["python", "-m", "getnet_ingestion.seed"]
+    env_file:
+      - .env
+    environment:
+      GETNET_REDIS_URL: redis://redis:6379/0
+      REDIS_URL: redis://redis:6379/0
+    volumes:
+      - ./getnet_ingestion/data:/app/getnet_ingestion/data:ro
+    depends_on:
+      redis:
+        condition: service_healthy
+
   app:
     build: .
     env_file:
       - .env
     environment:
+      GETNET_REDIS_URL: redis://redis:6379/0
       REDIS_URL: redis://redis:6379/0
       LANGSMITH_TRACING: ${LANGSMITH_TRACING:-false}
       LANGSMITH_PROJECT: ${LANGSMITH_PROJECT:-getnet-multi-agent}
@@ -12,6 +27,8 @@ services:
     depends_on:
       redis:
         condition: service_healthy
+      redis-seed:
+        condition: service_completed_successfully
     healthcheck:
       test:
         - CMD

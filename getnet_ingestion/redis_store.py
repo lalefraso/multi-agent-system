@@ -22,14 +22,15 @@ except ModuleNotFoundError as exc:
     from redis.commands.search.indexDefinition import IndexDefinition, IndexType
 
 from getnet_ingestion.embedder import EMBEDDING_DIMENSIONS, MODEL_NAME
+from getnet_ingestion.schema import GETNET_INDEX, GETNET_KEY_PREFIX
 
 
 DATA_DIR = Path(__file__).parent / "data"
 SUPPORTED_LOCALES = ("en", "mx")
 ALL_LOCALES = (*SUPPORTED_LOCALES, "all")
 DEFAULT_INPUT = DATA_DIR / "getnet_en_embeddings.jsonl"
-DEFAULT_INDEX = "idx:getnet"
-DEFAULT_PREFIX = "getnet:section:"
+DEFAULT_INDEX = GETNET_INDEX
+DEFAULT_PREFIX = GETNET_KEY_PREFIX
 LEGACY_INDEXES = ("idx:getnet:en", "idx:getnet:mx")
 PIPELINE_BATCH_SIZE = 200
 ENV_FILE = Path(__file__).resolve().parent.parent / ".env"

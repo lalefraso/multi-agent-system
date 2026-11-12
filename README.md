@@ -55,11 +55,13 @@ when enabling external lookup.
 The customer-support tool has no model-visible arguments. The API creates it
 for the authenticated request and binds the server-authorized customer ID in
 the tool's closure; the model can request a lookup but cannot choose a
-customer. It reads `getnet_users:customer:<customer_id>` from the same Redis
+customer. It reads `customers:customer:<customer_id>` from the same Redis
 connection configured by `GETNET_REDIS_URL` or `REDIS_URL`. Identity fields
 named `user_id`, `customer_id`, or `merchant_id` are removed from the tool
 result. Neither the authenticated principal nor the selected customer ID is
 included in the message sent to the model.
+For compatibility, it also reads the legacy `getnet_users:customer:` key
+prefix when a record is not found under `customers:customer:`.
 
 `POST /chat` requires an OIDC access token in the `Authorization: Bearer`
 header. Configure `OIDC_ISSUER`, `OIDC_AUDIENCE`, and `OIDC_JWKS_URL`; the API
@@ -168,11 +170,24 @@ uv pip compile --python-version 3.12 --universal --generate-hashes requirements.
 Install Docker Desktop, copy `.env.example` to `.env`, and set the API key for
 your selected LLM provider. Then build and start the API with Redis Stack, which
 provides Redis Search for knowledge lookup and RedisJSON for JSON customer
-records:
+records. The local English and Mexico embedding files must exist under
+`getnet_ingestion/data/`; if needed, generate them first using the commands in
+[`getnet_ingestion/README.md`](./getnet_ingestion/README.md):
 
 ```bash
 docker compose up --build
 ```
+
+On startup, Compose runs `getnet_ingestion.seed` once before the API. It loads
+the English and Mexico Getnet embeddings from `getnet_ingestion/data/` and adds
+five synthetic customer records under `customers:customer:*`. Existing
+customer records are preserved. The Compose services explicitly use their
+local Redis container even if `.env` contains a `GETNET_REDIS_URL` for another
+environment. Redis key prefixes appear as groups (not real folders) in Redis
+browser tools: Getnet keys use `getnet:*`, while synthetic customers use
+`customers:*`.
+Run the same `python -m getnet_ingestion.seed` command with the production Redis
+URL to initialize that environment with the identical key and index structure.
 
 The API is available at `http://localhost:8000`. `GET /health` checks Redis,
 the configured vector index, and the primary LLM provider's configuration and
