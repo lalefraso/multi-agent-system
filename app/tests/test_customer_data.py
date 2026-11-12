@@ -6,7 +6,7 @@ from uuid import UUID
 from fastapi import HTTPException
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
-from app.agents.router import _customer_support_tool
+from app.agents.customer_support import customer_support_tool
 from app.auth import AuthenticatedPrincipal
 from app.authorization import (
     CustomerNotAuthorizedError,
@@ -33,13 +33,16 @@ class CustomerDataTests(unittest.TestCase):
         self.authorize_customer = authorization.start()
         self.addCleanup(authorization.stop)
 
-    @patch("app.agents.router.fetch_customer_data", return_value='{"found":false}')
-    def test_customer_tool_has_no_model_arguments(self, fetch_data):
-        tool = _customer_support_tool("verified-customer-1")
+    @patch("app.agents.customer_support.build_customer_support_agent")
+    def test_customer_agent_is_bound_to_authorized_customer(self, build_agent):
+        build_agent.return_value.invoke.return_value = {
+            "messages": [AIMessage(content="Account is active.")]
+        }
+        tool = customer_support_tool("verified-customer-1")
 
-        self.assertEqual(tool.args, {})
-        self.assertEqual(tool.invoke({}), '{"found":false}')
-        fetch_data.assert_called_once_with("verified-customer-1")
+        self.assertEqual(set(tool.args), {"query"})
+        self.assertEqual(tool.invoke({"query": "Show my account"}), "Account is active.")
+        build_agent.assert_called_once_with("verified-customer-1")
 
     @patch("app.customer_data.Redis.from_url")
     @patch("app.customer_data._resolve_redis_url", return_value="redis://test")

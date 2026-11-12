@@ -45,7 +45,11 @@ The store validates the embedding model, dimensions, finite vector values, and u
 
 ### Initialize knowledge and synthetic customers
 
-Use the same initializer for local or production Redis. It upserts both locale corpora into `idx:getnet` and adds five synthetic customer records without overwriting existing customer keys:
+Use the same initializer for local or production Redis. It upserts both locale
+corpora into `idx:getnet` and adds five synthetic customer records plus their
+fictional transaction and terminal arrays under `customers:transactions:<customer_id>`
+and `customers:terminals:<customer_id>`. Each key is only created if absent;
+existing customer and support data is not overwritten or refreshed:
 
 ```bash
 .venv/bin/python -m getnet_ingestion.seed

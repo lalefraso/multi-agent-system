@@ -1,9 +1,9 @@
 # Getnet Multi-Agent System
 
-The router is the entry point and has two tools: a knowledge agent and a direct
-customer-data lookup. The knowledge agent uses the configured Redis vector
-index and allowlisted external resources. Customer support is a Redis lookup,
-not a separate LLM agent.
+The router is the entry point and delegates to a knowledge agent and a customer
+support agent. The knowledge agent uses the configured Redis vector index and
+allowlisted external resources. The customer support agent uses scoped Redis
+tools for account, transaction, and terminal information.
 
 ## Architecture
 
@@ -15,7 +15,8 @@ POST /chat
   -> Redis conversation history (last 20 messages, 30-day TTL)
   -> Router agent (LangChain)
        -> knowledge_agent tool
-       -> zero-argument customer_support_agent (server-scoped customer lookup)
+       -> customer_support_agent(query), scoped to the authorized customer
+            -> get_account, get_transactions, get_terminal_status
   -> Redis conversation history stores the user turn and final answer
   -> ChatResponse schema
 ```
@@ -52,16 +53,24 @@ from the user's query, passes only configured URLs to Tavily, and filters
 returned source URLs against that exact list. Set `TAVILY_API_KEY` in `.env`
 when enabling external lookup.
 
-The customer-support tool has no model-visible arguments. The API creates it
-for the authenticated request and binds the server-authorized customer ID in
-the tool's closure; the model can request a lookup but cannot choose a
-customer. It reads `customers:customer:<customer_id>` from the same Redis
-connection configured by `GETNET_REDIS_URL` or `REDIS_URL`. Identity fields
-named `user_id`, `customer_id`, or `merchant_id` are removed from the tool
-result. Neither the authenticated principal nor the selected customer ID is
-included in the message sent to the model.
-For compatibility, it also reads the legacy `getnet_users:customer:` key
-prefix when a record is not found under `customers:customer:`.
+The server binds the authorized customer ID to the customer support agent and
+each of its tools; neither model can supply or change that ID. The router sends
+the user's question as `query`, and the support agent uses:
+
+- `get_account`: account fields only, from `customers:customer:<customer_id>`;
+  falls back to `getnet_users:customer:<customer_id>`.
+- `get_transactions`: `customers:transactions:<customer_id>`, with optional
+  status, inclusive local `start_date`/`end_date` (YYYY-MM-DD), payment method,
+  and transaction ID filters.
+- `get_terminal_status`: `customers:terminals:<customer_id>`, with optional
+  status, terminal ID, and case-insensitive exact model filters.
+
+Transaction and terminal datasets are JSON arrays in Redis. Each tool returns
+at most 50 records (default 10); `offset` and `next_offset` support pagination.
+`found: false` means the dataset is missing, while `found: true` with an empty
+array means it exists but has no matching records. Amounts are in minor units.
+The tools only expose allowlisted fields and use the same Redis connection
+configured by `GETNET_REDIS_URL` or `REDIS_URL`.
 
 `POST /chat` requires an OIDC access token in the `Authorization: Bearer`
 header. Configure `OIDC_ISSUER`, `OIDC_AUDIENCE`, and `OIDC_JWKS_URL`; the API
@@ -115,10 +124,9 @@ records; it does not yet model merchants, merchant roles, or a merchant-to-
 customer hierarchy. Add that domain and its explicit policies when those data
 and business rules are defined.
 
-The customer lookup currently sends the rest of the customer's Redis record to
-the model. Before production, replace that broad response with an allowlist of
-fields needed for each supported request, and enforce any required token scopes
-or tenant/role policy. Also use per-identity rate limits and audit events that
+Before production, review the allowlisted customer fields for data minimization
+and enforce any required token scopes or tenant/role policy. Also use
+per-identity rate limits and audit events that
 avoid logging bearer tokens, prompts, or customer data; protect Redis with
 network restrictions, TLS, and least-privilege credentials.
 
@@ -181,7 +189,11 @@ docker compose up --build
 On startup, Compose runs `getnet_ingestion.seed` once before the API. It loads
 the English and Mexico Getnet embeddings from `getnet_ingestion/data/` and adds
 five synthetic customer records under `customers:customer:*`. Existing
-customer records are preserved. The Compose services explicitly use their
+customer records are preserved. It also seeds transaction and terminal arrays
+under their respective customer-scoped prefixes, including empty arrays for
+customers with no example records. Each key is created only if absent, so
+existing datasets are not updated on subsequent runs. These are fixed,
+fictional examples, not current transactional data. The Compose services explicitly use their
 local Redis container even if `.env` contains a `GETNET_REDIS_URL` for another
 environment. Redis key prefixes appear as groups (not real folders) in Redis
 browser tools: Getnet keys use `getnet:*`, while synthetic customers use
@@ -258,14 +270,14 @@ The response schema is:
   "request_id": "f9270a7c-5347-452d-910c-d70c025a24a4",
   "conversation_id": "9015dbdd-608a-443e-8ddb-a142817ad9df",
   "status": "completed",
-  "answer": "{\"account_status\":\"active\"}",
+  "answer": "Your account is active.",
   "agents_used": ["customer_support"]
 }
 ```
 
-`answer` contains the customer's JSON record as a string when the customer
-lookup is the only tool used. A missing record is returned as
-`{"found":false}`. `agents_used` can contain `knowledge` and/or
+`answer` contains the customer support agent's response when it is the only
+agent used. Missing records or datasets are reported by its tools rather than
+being treated as an empty result. `agents_used` can contain `knowledge` and/or
 `customer_support`. Invalid requests are rejected by the schema; missing or
 invalid authentication is rejected before the chat handler runs.
 

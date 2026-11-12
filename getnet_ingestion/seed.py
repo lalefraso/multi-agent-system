@@ -13,7 +13,11 @@ from getnet_ingestion.redis_store import (
     embeddings_for_locale,
     persist_corpora,
 )
-from getnet_ingestion.schema import CUSTOMER_KEY_PREFIX
+from getnet_ingestion.schema import (
+    CUSTOMER_KEY_PREFIX,
+    TERMINALS_KEY_PREFIX,
+    TRANSACTIONS_KEY_PREFIX,
+)
 
 
 SYNTHETIC_CUSTOMERS = (
@@ -69,6 +73,80 @@ SYNTHETIC_CUSTOMERS = (
     },
 )
 
+SYNTHETIC_TRANSACTIONS = {
+    "cliente1988": [
+        {
+            "transaction_id": "txn_synth_001",
+            "created_at": "2026-11-10T14:30:00-03:00",
+            "amount_minor": 12590, "currency": "BRL",
+            "payment_method": "credit_card", "status": "approved",
+        },
+        {
+            "transaction_id": "txn_synth_002",
+            "created_at": "2026-11-10T16:45:00-03:00",
+            "amount_minor": 4590, "currency": "BRL",
+            "payment_method": "debit_card", "status": "declined",
+            "decline_reason": "insufficient_funds",
+        },
+        {
+            "transaction_id": "txn_synth_003",
+            "created_at": "2026-11-11T09:00:00-03:00",
+            "amount_minor": 3000, "currency": "BRL",
+            "payment_method": "pix", "status": "pending",
+        },
+    ],
+    "cliente1989": [
+        {
+            "transaction_id": "txn_synth_004",
+            "created_at": "2026-11-11T11:00:00-03:00",
+            "amount_minor": 24900, "currency": "BRL",
+            "payment_method": "credit_card", "status": "approved",
+        },
+    ],
+    "cliente1990": [],
+    "cliente1991": [
+        {
+            "transaction_id": "txn_synth_005",
+            "created_at": "2026-11-09T12:00:00-03:00",
+            "amount_minor": 7800, "currency": "BRL",
+            "payment_method": "debit_card", "status": "declined",
+            "decline_reason": "issuer_declined",
+        },
+    ],
+    "cliente1992": [],
+}
+
+SYNTHETIC_TERMINALS = {
+    "cliente1988": [
+        {
+            "terminal_id": "term_synth_001", "model": "Get Clássica",
+            "status": "offline", "connection_type": "wifi",
+            "last_seen_at": "2026-11-11T09:15:00-03:00",
+        },
+        {
+            "terminal_id": "term_synth_002", "model": "Get Smart",
+            "status": "online", "connection_type": "wifi",
+            "last_seen_at": "2026-11-11T10:00:00-03:00",
+        },
+    ],
+    "cliente1989": [
+        {
+            "terminal_id": "term_synth_003", "model": "Get Smart",
+            "status": "online", "connection_type": "mobile",
+            "last_seen_at": "2026-11-11T10:30:00-03:00",
+        },
+    ],
+    "cliente1990": [],
+    "cliente1991": [
+        {
+            "terminal_id": "term_synth_004", "model": "Get Mini",
+            "status": "offline", "connection_type": "bluetooth",
+            "last_seen_at": "2026-11-09T18:00:00-03:00",
+        },
+    ],
+    "cliente1992": [],
+}
+
 
 class RedisSeedError(RuntimeError):
     """Raised when seed data cannot be loaded into Redis."""
@@ -96,11 +174,34 @@ def seed_synthetic_customers(client: Redis) -> tuple[int, int]:
     return created, skipped
 
 
+def seed_synthetic_support_data(client: Redis) -> tuple[int, int]:
+    created = 0
+    skipped = 0
+    try:
+        for prefix, records in (
+            (TRANSACTIONS_KEY_PREFIX, SYNTHETIC_TRANSACTIONS),
+            (TERMINALS_KEY_PREFIX, SYNTHETIC_TERMINALS),
+        ):
+            for customer_id, entries in records.items():
+                inserted = client.set(
+                    f"{prefix}{customer_id}",
+                    json.dumps(entries, ensure_ascii=False),
+                    nx=True,
+                )
+                if inserted:
+                    created += 1
+                else:
+                    skipped += 1
+    except RedisError as exc:
+        raise RedisSeedError(f"Could not seed synthetic support data: {exc}") from exc
+    return created, skipped
+
+
 def seed_redis(
     redis_url: str | None = None,
     *,
     recreate_index: bool = False,
-) -> tuple[int, int, int]:
+) -> tuple[int, int, int, int, int]:
     try:
         connection_url = _resolve_redis_url(redis_url)
     except RedisStoreError as exc:
@@ -123,12 +224,16 @@ def seed_redis(
     try:
         client.ping()
         customers_created, customers_skipped = seed_synthetic_customers(client)
+        support_created, support_skipped = seed_synthetic_support_data(client)
     except RedisError as exc:
         raise RedisSeedError(f"Could not connect to Redis: {exc}") from exc
     finally:
         client.close()
 
-    return customers_created, customers_skipped, sections_loaded
+    return (
+        customers_created, customers_skipped, sections_loaded,
+        support_created, support_skipped,
+    )
 
 
 def main() -> int:
@@ -150,7 +255,10 @@ def main() -> int:
     args = parser.parse_args()
 
     try:
-        customers_created, customers_skipped, sections_loaded = seed_redis(
+        (
+            customers_created, customers_skipped, sections_loaded,
+            support_created, support_skipped,
+        ) = seed_redis(
             args.redis_url,
             recreate_index=args.recreate_index,
         )
@@ -162,6 +270,8 @@ def main() -> int:
         "Redis initialized: "
         f"{customers_created} synthetic customers added, "
         f"{customers_skipped} existing customer records preserved, "
+        f"{support_created} support datasets added, "
+        f"{support_skipped} existing support datasets preserved, "
         f"{sections_loaded} Getnet knowledge sections loaded."
     )
     return 0
