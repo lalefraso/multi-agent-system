@@ -17,7 +17,9 @@ POST /chat
        -> knowledge_agent tool
        -> customer_support_agent(query), scoped to the authorized customer
             -> get_account, get_transactions, get_terminal_status
-  -> Redis conversation history stores the user turn and final answer
+       -> human_escalation_agent(reason), terminal handoff
+  -> Redis conversation history stores ordinary turns;
+     escalated turns store a separate handoff record
   -> ChatResponse schema
 ```
 
@@ -32,8 +34,8 @@ pipeline and Redis vector index are in [`getnet_ingestion/`](./getnet_ingestion/
 this skeleton does not change or recreate that database.
 
 Deep Agents includes general-purpose built-in tools; router middleware limits
-the tools exposed to its model to `knowledge_agent` and
-`customer_support_agent`. The fallback middleware logs provider attempts,
+the tools exposed to its model to `knowledge_agent`, `customer_support_agent`,
+and `human_escalation_agent`. The fallback middleware logs provider attempts,
 message counts, duration, and success/failure using Python logging; it does not
 log prompt or response contents.
 
@@ -129,6 +131,45 @@ and enforce any required token scopes or tenant/role policy. Also use
 per-identity rate limits and audit events that
 avoid logging bearer tokens, prompts, or customer data; protect Redis with
 network restrictions, TLS, and least-privilege credentials.
+
+## Human escalation
+
+The router can call `human_escalation_agent` when a user requests a person,
+asks for an unavailable sensitive action, reports fraud or an unrecognized
+action, makes a formal or legal complaint, or needs human help with an
+unresolved issue. Routing is model-based and is not a guaranteed security
+guardrail or fraud detection mechanism. A payment decline, pending payment,
+or sensitive data alone does not establish fraud.
+
+The agent summarizes the recent conversation and the handoff reason. Its
+terminal tool stops the router without another model response. The server
+stores a pending case before responding; it never performs the requested
+financial or account action. A successful response includes
+`"status": "escalated"` and `escalation_id`, and confirms registration in
+Spanish without claiming that an operator is connected. The escalation record
+contains the authorized customer, a hash scoped to the principal and customer,
+the conversation ID, reason, summary, UTC creation time and status. Statuses
+are `pending`, `taken`, and `closed`; only `pending` is created in this
+increment. Records have no expiry.
+
+An escalated conversation is terminal for the automated agents: subsequent
+`POST /chat` messages for that conversation return HTTP 409 and are not stored
+or passed to a model. The same check applies after history ownership expires,
+and mismatched ownership returns HTTP 404. Case creation is idempotent per
+conversation. The escalation itself contains the summary rather than a full
+conversation snapshot; the summarizer only sees the recent conversation context.
+The triggering message is not separately added to the conversation history.
+There is currently **no operator endpoint, notification, assignment, or live
+handoff**. A pending case does not mean that a person has received or reviewed
+it. If storing it fails, `/chat` returns HTTP 503 rather than confirming success.
+
+The summary prompt requests omission of secrets and unnecessary personal data,
+but model-generated summaries are not guaranteed to be sanitized. Before
+production, add validated redaction, operator access controls, retention and
+deletion policies, backups, and monitoring. The Compose Redis enables AOF with
+`appendfsync everysec` on the `redis-data` volume: a crash can still lose up to
+approximately one second of writes, and volume loss is not protected. Other
+Redis deployments must configure their own appropriate persistence and recovery.
 
 Conversation memory uses Redis lists on the same deployment. A conversation
 owner record binds each `conversation_id` to a hash of the authenticated

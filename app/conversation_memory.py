@@ -8,6 +8,10 @@ from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
 from redis import Redis
 from redis.exceptions import RedisError
 
+from app.escalation import (
+    Escalation, EscalationDraft, create_escalation, get_escalation,
+)
+from app.schemas import EscalationReason
 from getnet_ingestion.redis_store import RedisStoreError, _resolve_redis_url
 
 
@@ -54,6 +58,7 @@ class ConversationHistory:
                 redis_url, decode_responses=True
             )
             self._customer_id = customer_id
+            self._conversation_id = conversation_id
             owner_identity = f"{principal_id}\0{customer_id}".encode("utf-8")
             self._owner_token = hashlib.sha256(owner_identity).hexdigest()
             self._owner_key = (
@@ -76,6 +81,17 @@ class ConversationHistory:
             raise ConversationMemoryError(
                 "Could not configure Redis conversation history"
             ) from exc
+
+    def get_escalation(self) -> Escalation | None:
+        return get_escalation(self._client, self._conversation_id, self._owner_token)
+
+    def create_escalation(
+        self, reason: EscalationReason, draft: EscalationDraft
+    ) -> Escalation:
+        return create_escalation(
+            self._client, self._conversation_id, self._owner_token,
+            self._customer_id, reason, draft,
+        )
 
     def load_context(self) -> list[BaseMessage]:
         try:

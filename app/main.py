@@ -9,6 +9,7 @@ from uuid import uuid4
 from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, HTTPException, Response, status
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+from pydantic import ValidationError
 from redis import Redis
 from redis.exceptions import RedisError
 
@@ -25,6 +26,11 @@ from app.authorization import (
 )
 from app.agents.router import build_router_agent
 from app.customer_data import CustomerDataError
+from app.escalation import (
+    EscalationError,
+    EscalationOwnershipError,
+    EscalationProposal,
+)
 from app.conversation_memory import (
     ConversationBusyError,
     ConversationHistory,
@@ -43,6 +49,10 @@ from app.schemas import (
 from getnet_ingestion.redis_store import RedisStoreError, _resolve_redis_url
 
 LOGGER = logging.getLogger(__name__)
+ESCALATION_CONFIRMATION = (
+    "Tu solicitud de atención humana fue registrada. "
+    "Aún no hay un operador conectado."
+)
 
 
 def _positive_int_setting(name: str, default: int) -> int:
@@ -173,6 +183,7 @@ def _check_redis_dependencies() -> dict[str, str]:
 @app.post(
     "/chat",
     response_model=ChatResponse,
+    response_model_exclude_none=True,
     responses={
         401: {"model": ErrorResponse},
         403: {"model": ErrorResponse},
@@ -236,7 +247,31 @@ def _process_chat(request: ChatRequest, principal_id: str) -> ChatResponse:
         ) from exc
 
     try:
+        existing_escalation = history.get_escalation()
+        if existing_escalation is not None:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=(
+                    "This conversation was escalated to human support; "
+                    "new messages are not accepted."
+                ),
+            )
         history.claim_ownership()
+    except EscalationOwnershipError as exc:
+        _close_history(history)
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Conversation not found",
+        ) from exc
+    except EscalationError as exc:
+        _close_history(history)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=str(exc),
+        ) from exc
+    except HTTPException:
+        _close_history(history)
+        raise
     except ConversationOwnershipError as exc:
         _close_history(history)
         raise HTTPException(
@@ -251,21 +286,25 @@ def _process_chat(request: ChatRequest, principal_id: str) -> ChatResponse:
         ) from exc
 
     try:
-        router_agent = _router_agent(customer_id)
-    except HTTPException:
-        _close_history(history)
-        raise
-
-    try:
         try:
             history.acquire_turn_lock()
+            if history.get_escalation() is not None:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail=(
+                        "This conversation was escalated to human support; "
+                        "new messages are not accepted."
+                    ),
+                )
             messages = history.load_context()
             messages.append(HumanMessage(content=request.message))
+            router_agent = _router_agent(customer_id)
             result = router_agent.invoke({"messages": messages})
 
             result_messages = result.get("messages", [])
             agents_used: list[AgentName] = []
             customer_support_output: str | None = None
+            escalation_output: str | None = None
 
             for message in result_messages:
                 if not isinstance(message, ToolMessage):
@@ -275,6 +314,25 @@ def _process_chat(request: ChatRequest, principal_id: str) -> ChatResponse:
                 elif message.name == "customer_support_agent":
                     agents_used.append(AgentName.CUSTOMER_SUPPORT)
                     customer_support_output = _message_text(message.content)
+                elif message.name == "human_escalation_agent":
+                    if message.status == "error" or escalation_output is not None:
+                        raise EscalationError("Invalid human escalation tool result")
+                    agents_used.append(AgentName.HUMAN_ESCALATION)
+                    escalation_output = _message_text(message.content)
+
+            if escalation_output is not None:
+                try:
+                    proposal = EscalationProposal.model_validate_json(escalation_output)
+                except ValidationError as exc:
+                    raise EscalationError("Invalid human escalation proposal") from exc
+                escalation = history.create_escalation(proposal.reason, proposal.draft)
+                return ChatResponse(
+                    conversation_id=conversation_id,
+                    status=AgentStatus.ESCALATED,
+                    answer=ESCALATION_CONFIRMATION,
+                    agents_used=list(dict.fromkeys(agents_used)),
+                    escalation_id=escalation.escalation_id,
+                )
 
             if (
                 AgentName.KNOWLEDGE not in agents_used
@@ -305,6 +363,16 @@ def _process_chat(request: ChatRequest, principal_id: str) -> ChatResponse:
             headers={"Retry-After": "1"},
         ) from exc
     except ConversationMemoryError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=str(exc),
+        ) from exc
+    except EscalationOwnershipError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Conversation not found",
+        ) from exc
+    except EscalationError as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=str(exc),

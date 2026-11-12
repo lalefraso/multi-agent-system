@@ -186,6 +186,7 @@ class CustomerDataTests(unittest.TestCase):
         self, router_agent, build_history
     ):
         history = Mock()
+        history.get_escalation.return_value = None
         history.load_context.return_value = []
         build_history.return_value = history
         lookup_output = '{"account_status":"active"}'
@@ -237,6 +238,7 @@ class CustomerDataTests(unittest.TestCase):
             AIMessage(content="Earlier answer"),
         ]
         history = Mock()
+        history.get_escalation.return_value = None
         history.load_context.return_value = previous_messages.copy()
         build_history.return_value = history
         router_agent.return_value.invoke.return_value = {
@@ -303,6 +305,7 @@ class CustomerDataTests(unittest.TestCase):
         self, router_agent, build_history
     ):
         history = Mock()
+        history.get_escalation.return_value = None
         history.acquire_turn_lock.side_effect = ConversationBusyError(
             "This conversation is busy"
         )
@@ -361,6 +364,7 @@ class CustomerDataTests(unittest.TestCase):
         self, router_agent, build_history
     ):
         history = Mock()
+        history.get_escalation.return_value = None
         history.claim_ownership.side_effect = ConversationOwnershipError
         build_history.return_value = history
 

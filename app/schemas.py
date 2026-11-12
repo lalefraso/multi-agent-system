@@ -9,10 +9,25 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 class AgentName(StrEnum):
     KNOWLEDGE = "knowledge"
     CUSTOMER_SUPPORT = "customer_support"
+    HUMAN_ESCALATION = "human_escalation"
 
 
 class AgentStatus(StrEnum):
     COMPLETED = "completed"
+    ESCALATED = "escalated"
+
+
+class EscalationReason(StrEnum):
+    HUMAN_REQUESTED = "human_requested"
+    ACTION_UNAVAILABLE = "action_unavailable"
+    RISK_OR_COMPLAINT = "risk_or_complaint"
+    UNRESOLVED = "unresolved"
+
+
+class EscalationStatus(StrEnum):
+    PENDING = "pending"
+    TAKEN = "taken"
+    CLOSED = "closed"
 
 
 class ChatRequest(BaseModel):
@@ -43,6 +58,7 @@ class ChatResponse(BaseModel):
     status: AgentStatus
     answer: str
     agents_used: list[AgentName] = Field(default_factory=list)
+    escalation_id: UUID | None = None
 
 
 class AgentToolInput(BaseModel):

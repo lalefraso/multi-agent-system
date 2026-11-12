@@ -187,6 +187,7 @@ class CustomerSupportTests(unittest.TestCase):
             else _principal_hash("principal-1")
         )
         history_factory.return_value.load_context.return_value = []
+        history_factory.return_value.get_escalation.return_value = None
 
         def support_response(payload):
             self.assertIn("cliente1989", payload["messages"][0]["content"])
