@@ -1,0 +1,68 @@
+{
+  "schema_version": 1,
+  "dataset_id": "challenge-scenarios-v1",
+  "label_status": "proposed",
+  "label_review": null,
+  "cases": [
+    {
+      "id": "product-comparison",
+      "message": "What's the difference between the Get Clássica and the Get Smart?",
+      "expected_routes": ["knowledge"],
+      "rationale": "General product comparison; similar product names must not be assumed equivalent."
+    },
+    {
+      "id": "weather",
+      "message": "What's the weather forecast in Porto Alegre tomorrow?",
+      "expected_routes": null,
+      "rationale": "General web-search scope is not defined; routing label pending product decision."
+    },
+    {
+      "id": "sales-deposit",
+      "message": "When will the money from yesterday's sales be deposited?",
+      "expected_routes": ["customer_support"],
+      "rationale": "Account-specific sales question; the support agent must not invent settlement information."
+    },
+    {
+      "id": "pix-account",
+      "message": "Do I need a bank account to receive my sales via Pix?",
+      "expected_routes": ["knowledge"],
+      "rationale": "General product and service guidance, without a request for account-specific data."
+    },
+    {
+      "id": "connectivity",
+      "message": "My card machine won't connect to the internet, what should I do?",
+      "expected_routes": ["knowledge"],
+      "rationale": "General troubleshooting, with no stated need for customer-specific data."
+    },
+    {
+      "id": "receivables-advance",
+      "message": "How does receivables advance (antecipação) work with Getnet?",
+      "expected_routes": ["knowledge"],
+      "rationale": "General product and service guidance."
+    },
+    {
+      "id": "exchange-rate",
+      "message": "What's the euro exchange rate today?",
+      "expected_routes": null,
+      "rationale": "General web-search scope is not defined; routing label pending product decision."
+    },
+    {
+      "id": "decline-error",
+      "message": "My card machine is showing a transaction decline error.",
+      "expected_routes": ["knowledge"],
+      "rationale": "General troubleshooting; a decline alone does not establish fraud."
+    },
+    {
+      "id": "installments",
+      "message": "How many installments can I split a sale into with the crediário?",
+      "expected_routes": ["knowledge"],
+      "rationale": "General product guidance; specific figures require supporting evidence."
+    },
+    {
+      "id": "payment-link",
+      "message": "Can I sell through WhatsApp using the Payment Link?",
+      "expected_routes": ["knowledge"],
+      "rationale": "General product capability question."
+    }
+  ]
+}

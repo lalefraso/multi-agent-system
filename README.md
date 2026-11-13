@@ -377,3 +377,9 @@ python -m unittest discover -s getnet_ingestion/tests -p 'test_*.py'
 
 CI installs the locked dependencies and runs both suites. Customer lookup
 tests mock Redis so they do not read production customer data.
+
+For the offline semantic evaluation harness, proposed challenge scenarios,
+human-review rubric, and instructions for recording real runs, see
+[`evaluation/README.md`](./evaluation/README.md). Its CI tests use synthetic
+inputs only; neither those tests nor the proposed labels demonstrate model
+quality.
