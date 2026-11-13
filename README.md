@@ -377,3 +377,8 @@ python -m unittest discover -s getnet_ingestion/tests -p 'test_*.py'
 
 CI installs the locked dependencies and runs both suites. Customer lookup
 tests mock Redis so they do not read production customer data.
+
+Retrieval-only evaluation, its versioned holdout, an offline exact-cosine
+baseline, and instructions for comparing the current vector-search tool are
+documented in [`retrieval_evaluation/README.md`](./retrieval_evaluation/README.md).
+CI tests the evaluator without downloading models or accessing Redis.

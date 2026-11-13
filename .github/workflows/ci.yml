@@ -23,3 +23,5 @@ jobs:
         run: python -m unittest discover -s app/tests -p 'test_*.py'
       - name: Run ingestion tests
         run: python -m unittest discover -s getnet_ingestion/tests -p 'test_*.py'
+      - name: Test offline retrieval evaluation
+        run: python -m unittest -v retrieval_evaluation.test_evaluate

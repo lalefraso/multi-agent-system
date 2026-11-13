@@ -1,0 +1,143 @@
+{
+  "version": "getnet-retrieval-holdout-v1",
+  "corpora": {
+    "en": "73c2a36159defa6fa6e8a64885ab652ce97fc154ed540937d38f3fae27b785d4",
+    "mx": "c4250fc48f095c16e36a0a6d05f26c6fe9b9e222b03e6293cbb06a8b38484fe9"
+  },
+  "queries": [
+    {
+      "id": "en-classic-card-types",
+      "query": "Which card and contactless payment types does Get Classic accept?",
+      "relevant": [
+        {
+          "id": "db87c38dd90596b36dd99077af23b90d2b77c90586d032291e4e8b8aefa1bfde",
+          "locale": "en",
+          "url": "https://www.getnet.net/en/our-solutions/in-person-payments",
+          "heading": "In-person Payments - Elevating the shopping experience - Get Classic",
+          "evidence": "chip card, magnetic stripe, contactless and mobiile payments"
+        }
+      ]
+    },
+    {
+      "id": "en-smart-integration",
+      "query": "What business operations can Get Smart integrate?",
+      "relevant": [
+        {
+          "id": "e714dc05aba0f2d5177c5920b897fed493999bc2249aab4f3a1b1fd5d06e0aa9",
+          "locale": "en",
+          "url": "https://www.getnet.net/en/our-solutions/in-person-payments",
+          "heading": "In-person Payments - Elevating the shopping experience - Get Smart",
+          "evidence": "From entering the stock to closing the cashier, everything is integrated."
+        }
+      ]
+    },
+    {
+      "id": "en-mcp-connections",
+      "query": "What does the MCP AI Tool Kit connect?",
+      "relevant": [
+        {
+          "id": "0e73e57c38a1246b7e90f31bb7b51840e85eff55c4c21a9938624dff94cc8415",
+          "locale": "en",
+          "url": "https://www.getnet.net/en/our-solutions/agentic-commerce",
+          "heading": "Agentic Commerce - Our Agentic Commerce Suite - MCP AI Tool Kit",
+          "evidence": "connects merchants, AI agents and payment networks"
+        }
+      ]
+    },
+    {
+      "id": "en-shopping-agent",
+      "query": "What does the Shopping Agent do for customers?",
+      "relevant": [
+        {
+          "id": "f8ab84e66ee243c626e94fe0983e39b4c2b67f33d56d9ebf6de8e25241a43777",
+          "locale": "en",
+          "url": "https://www.getnet.net/en/our-solutions/agentic-commerce",
+          "heading": "Agentic Commerce - Our Agentic Commerce Suite - Shopping Agent",
+          "evidence": "guide customers from discovery to purchase"
+        }
+      ]
+    },
+    {
+      "id": "mx-link-whatsapp",
+      "query": "¿Qué soluciones permiten enviar un link de pago por WhatsApp?",
+      "relevant": [
+        {
+          "id": "a845dc75a2ec6be59da909eec3ae921497795776b611bb765834484756f3d50d",
+          "locale": "mx",
+          "url": "https://www.getnet.net/mx/nuestras-soluciones/pagos-en-linea/link-de-pago",
+          "heading": "Get Link and Pay: Vende por WhatsApp y RRSS | Getnet - Get Link and Pay - Cobros sin Límites",
+          "evidence": "link de pago a través de WhatsApp"
+        },
+        {
+          "id": "f0d8e0f250f7dfcc2895e36ced50628b6a604cb4759c6aaa2c5c4b116fdb7794",
+          "locale": "mx",
+          "url": "https://www.getnet.net/mx/tu-negocio/sectores/terminal-de-pago-para-refaccionarias-y-ferreterias",
+          "heading": "Refaccionarias y ferreterías: Soluciones de pago para tu negocio | Getnet - Más soluciones para cobros rápidos y seguros - Cobra a distancia con un link de pago",
+          "evidence": "Envío de links de pago a través de WhatsApp"
+        },
+        {
+          "id": "c2afdfe133cb5b352748cb730e6fd60386e75928148bc209a801892875d57b3e",
+          "locale": "mx",
+          "url": "https://www.getnet.net/mx/tu-negocio/sectores/terminal-de-pago-para-hoteles",
+          "heading": "Hoteles: Soluciones de pago para tu hotel | Getnet - Más soluciones para una experiencia inolvidable - Cobra a distancia con links de pago",
+          "evidence": "Envío de links de pago a través de WhatsApp"
+        },
+        {
+          "id": "14e4a2604f1a159a2f4c40702fcd3014fa24964eeb7ccb3b6d53bed0de07332a",
+          "locale": "mx",
+          "url": "https://www.getnet.net/mx/tu-negocio/sectores/terminal-de-pago-para-miscelaneas",
+          "heading": "Misceláneas: Cobra fácil en tu tienda | Getnet - Más soluciónes que se ajustan a tus necesidades - Cobra a distancia con links de pago",
+          "evidence": "Envío de links de pago a través de WhatsApp"
+        },
+        {
+          "id": "a7f8b2d1b930921aa6dd503388779b3c96fe317bbc28e5b650572b1eee8af23f",
+          "locale": "mx",
+          "url": "https://www.getnet.net/mx/tu-negocio/sectores/terminal-de-pago-para-restaurantes",
+          "heading": "Restaurantes: Soluciones de pago para tu negocio | Getnet - Más soluciones para una experiencia de pago inolvidable - Cobra a distancia con links de pago",
+          "evidence": "Envío de links de pago a través de WhatsApp"
+        },
+        {
+          "id": "8431ddcb47ab1109b07e2cc4d42fb59a40fcf78c40dcef0aa1b9c24d76e5b30b",
+          "locale": "mx",
+          "url": "https://www.getnet.net/mx/tu-negocio/sectores/terminal-de-pago-para-pymes",
+          "heading": "PYMES: Soluciones de pago para tu negocio | Getnet - Más soluciónes que se ajustan a tus necesidades - Cobra a distancia con links de pago",
+          "evidence": "Envío de links de pago a través de WhatsApp"
+        },
+        {
+          "id": "ac9dfd0aee263f84fea9f3e915c45f5f41b8421bf20de5adfb21c3ac3b1a2567",
+          "locale": "mx",
+          "url": "https://www.getnet.net/mx/recursos/blog/ligas-pago",
+          "heading": "Ligas de pago: cobra fácil desde cualquier lugar | Getnet - ¿Qué es Get Link and Pay?",
+          "evidence": "ligas de pago que puedes enviar a tus clientes por WhatsApp"
+        },
+        {
+          "id": "037b2991d95a43a635361193da327a502214ef3399e12c41ed0a92b0d7a3fbc7",
+          "locale": "mx",
+          "url": "https://www.getnet.net/mx/recursos/blog/Pagos-digitales-para-hoteles",
+          "heading": "Pagos digitales para hoteles - El huésped ya no quiere complicaciones",
+          "evidence": "link de pago y compartirlo mediante WhatsApp"
+        },
+        {
+          "id": "f8d031593b42a2da7ec371767427c3c527159ca4d2a63b99bb47af8e37e3946f",
+          "locale": "mx",
+          "url": "https://www.getnet.net/mx/recursos/blog/Pagos-para-restaurantes",
+          "heading": "Las tendencias que están transformando la experiencia de comer - El reto está detrás de la mesa",
+          "evidence": "crear una liga y enviarla por WhatsApp"
+        }
+      ]
+    },
+    {
+      "id": "en-link-channels",
+      "query": "Which channels can I use to sell with Get Link & Pay?",
+      "relevant": [
+        {
+          "id": "a8d90d420a4e6e82d4f723daf770203ff19707f510a5e97d44273256adcb2e9e",
+          "locale": "en",
+          "url": "https://www.getnet.net/en/our-solutions/online-payments",
+          "heading": "Getnet - Online Payments - Get Link & Pay",
+          "evidence": "WhatsApp, SMS or your preferred social network"
+        }
+      ]
+    }
+  ]
+}
