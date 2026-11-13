@@ -12,11 +12,12 @@ POST /chat
   -> JWT/OIDC authentication and verified principal (issuer + subject)
   -> Redis membership check for the requested customer_id
   -> ChatRequest schema (message, optional authorized customer_id, conversation_id)
-  -> Redis conversation history (last 20 messages, 30-day TTL)
+  -> Redis conversation history and rolling summary (30-day TTL)
   -> Router agent (LangChain)
        -> knowledge_agent tool
        -> customer_support_agent(query), scoped to the authorized customer
             -> get_account, get_transactions, get_terminal_status
+            -> search_conversation_memory (scoped Redis vector index)
        -> human_escalation_agent(reason), terminal handoff
   -> Redis conversation history stores ordinary turns;
      escalated turns store a separate handoff record
@@ -289,11 +290,66 @@ owner record binds each `conversation_id` to a hash of the authenticated
 principal and selected customer; the history key is also scoped to both. A
 different principal or customer cannot read that history, even if they submit
 the same conversation ID. When omitted, the API creates an ID and returns it.
-Redis expires the owner record and conversation after 30 days, and only the
-most recent 20 messages are included in agent context. Redis Search is required
+Redis expires the owner record and conversation after 30 days. At most the
+most recent 20 messages and 16,000 characters are included in agent context;
+the oldest messages in that window are dropped first. A single oversized
+recent message is truncated from the beginning. Redis Search is required
 for vector knowledge lookup; RedisJSON is required if customer records are
 stored as RedisJSON. History read/write failures return HTTP 503 rather than
 silently starting a conversation without memory.
+
+### Rolling summary and semantic conversation memory
+
+After each ordinary saved turn, the application updates a bounded rolling
+summary with the configured LLM and embeds it locally with the existing
+`intfloat/multilingual-e5-small` model. A checkpoint records the number of
+history messages included; updates process at most 10 messages at a time.
+Existing conversations are summarized incrementally when they are reopened
+and receive ordinary turns, not backfilled automatically. A summary may
+overlap the recent message window. The original history is not deleted by
+compaction. Escalation turns are not added to ordinary history or summarized.
+
+The summary and embedding are stored together as a Redis hash under
+`chat:memory:<scope-hash>:<conversation-id>`, with a 30-day TTL refreshed on
+successful updates. The dedicated Redis Search index `idx:conversation-memory`
+is created on demand and does not modify the product-knowledge index. Redis
+must allow `FT.INFO`, `FT.CREATE`, `FT.SEARCH`, `WATCH`, transactions and hash
+operations. The application stores the summary, embedding and checkpoint
+atomically. If the checkpoint changes concurrently, the update is abandoned.
+If summarization or embedding fails, the old checkpoint remains for a later
+turn to retry. Once history changes, an older embedding is excluded from
+cross-conversation search until the checkpoint catches up.
+
+The server passes the current summary as untrusted context to the router and
+customer support agent. For questions about previous conversations, the
+customer support agent can use `search_conversation_memory`; the query is
+scoped by the authenticated principal and authorized customer before vector
+search. It rechecks current customer authorization, each conversation's owner,
+and the summary checkpoint before returning at most three results. Candidate
+search is bounded to 20 results and has no calibrated similarity threshold;
+retrieval can miss relevant history or return irrelevant summaries. Summaries
+are untrusted and may be incomplete or stale, not current account facts.
+Existing account and transaction tools remain authoritative.
+
+Set `CONVERSATION_SEMANTIC_MEMORY_ENABLED=false` to disable summary loading,
+updates, and semantic lookup; the default is `true`. Enabling it adds an LLM
+call and local embedding work after each normal turn, increasing latency and
+provider cost. If semantic memory fails, the chat continues and logs only a
+generic warning; history failures retain their existing HTTP 503 behavior.
+No automatic retry runs until a later turn.
+
+Summarization sends conversation content to the configured LLM provider; it
+disables LangSmith tracing for the summary call, but other application traces
+can still contain conversation data. Common credential/card patterns and the
+customer ID are redacted before summarization and again before storage, and
+the prompt requests minimal data. **This is not comprehensive redaction:**
+summaries and embeddings may still contain personal or sensitive information.
+Protect Redis and its backups, review data handling and provider authorization
+before use, and implement validated redaction and deletion before production.
+There is no conversation-deletion API; manual deletion must remove the history,
+owner record, and corresponding `chat:memory` hash. Expiry of the memory hash
+is independent of the history key; missing or changed history prevents a
+summary from being returned by semantic search.
 
 The API limits concurrent chat requests per process with a non-blocking
 semaphore. Set `CHAT_MAX_CONCURRENT_REQUESTS` in `.env` (default: `8`); requests

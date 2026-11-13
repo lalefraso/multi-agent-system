@@ -35,7 +35,8 @@ def human_escalation_tool(reason: EscalationReason, runtime: ToolRuntime) -> str
     messages = [
         message
         for message in runtime.state["messages"]
-        if isinstance(message, HumanMessage)
+        if (isinstance(message, HumanMessage)
+            and not message.additional_kwargs.get("conversation_summary"))
         or (isinstance(message, AIMessage) and not message.tool_calls)
     ]
     result = build_human_escalation_agent().invoke({

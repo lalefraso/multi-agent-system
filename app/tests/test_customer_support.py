@@ -24,6 +24,10 @@ from getnet_ingestion.seed import SYNTHETIC_TERMINALS, SYNTHETIC_TRANSACTIONS
 
 class CustomerSupportTests(unittest.TestCase):
     def setUp(self):
+        for name in ("read_current_summary", "update_summary"):
+            memory_patch = patch(f"app.main.{name}")
+            memory_patch.start().return_value = None
+            self.addCleanup(memory_patch.stop)
         self.url = patch("app.customer_data._resolve_redis_url", return_value="redis://test")
         self.redis = patch("app.customer_data.Redis.from_url")
         self.url.start()
@@ -216,7 +220,10 @@ class CustomerSupportTests(unittest.TestCase):
             (TRANSACTIONS_KEY_PREFIX + "cliente1988",),
             [call.args for call in auth_client.get.call_args_list],
         )
-        build_agent.assert_called_once_with("cliente1988")
+        self.assertEqual(build_agent.call_count, 1)
+        self.assertEqual(build_agent.call_args.args[0], "cliente1988")
+        self.assertEqual(build_agent.call_args.args[1].principal_id, "principal-1")
+        self.assertEqual(build_agent.call_args.args[1].customer_id, "cliente1988")
 
         router_factory.reset_mock()
         with self.assertRaises(HTTPException) as raised:

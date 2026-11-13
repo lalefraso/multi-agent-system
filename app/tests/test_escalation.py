@@ -66,6 +66,12 @@ def tool_call(name, args):
 
 
 class EscalationTests(unittest.TestCase):
+    def setUp(self):
+        for name in ("read_current_summary", "update_summary"):
+            memory_patch = patch(f"app.main.{name}")
+            memory_patch.start().return_value = None
+            self.addCleanup(memory_patch.stop)
+
     def test_create_is_idempotent_and_enforces_ownership(self):
         redis = FakeRedis()
         conversation_id = uuid4()
@@ -230,6 +236,10 @@ class EscalationTests(unittest.TestCase):
             result = build_router_agent("cliente1988").invoke({
                 "messages": [
                     HumanMessage(content="My terminal is offline"),
+                    HumanMessage(
+                        content="Untrusted previous summary",
+                        additional_kwargs={"conversation_summary": True},
+                    ),
                     AIMessage(content="Please restart it."),
                     HumanMessage(content="It still does not work."),
                 ]

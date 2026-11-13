@@ -14,6 +14,7 @@ from app.conversation_memory import (
     CONVERSATION_TTL_SECONDS,
     HISTORY_KEY_PREFIX,
     MAX_CONTEXT_MESSAGES,
+    MAX_CONTEXT_CHARACTERS,
     ConversationBusyError,
     ConversationHistory,
     ConversationMemoryError,
@@ -23,6 +24,22 @@ from app.conversation_memory import (
 
 
 class ConversationHistoryTests(unittest.TestCase):
+    @patch("app.conversation_memory.Redis.from_url")
+    @patch("app.conversation_memory._resolve_redis_url", return_value="redis://test")
+    def test_bounds_recent_context_without_deleting_history(self, _resolve, redis_from_url):
+        client = redis_from_url.return_value
+        client.lrange.return_value = [
+            json.dumps({"type": "human", "content": "a" * 9000}),
+            json.dumps({"type": "ai", "content": "b" * 9000}),
+        ]
+        history = ConversationHistory("principal", "customer", UUID(int=1))
+        messages = history.load_context()
+        self.assertEqual(len(messages), 1)
+        self.assertEqual(len(messages[0].content), 9000)
+        self.assertLessEqual(sum(len(message.content) for message in messages), MAX_CONTEXT_CHARACTERS)
+        client.delete.assert_not_called()
+        client.ltrim.assert_not_called()
+
     @patch("app.conversation_memory.Redis.from_url")
     @patch(
         "app.conversation_memory._resolve_redis_url",

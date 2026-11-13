@@ -26,6 +26,10 @@ from app.schemas import AgentName, ChatRequest
 
 class CustomerDataTests(unittest.TestCase):
     def setUp(self):
+        for name in ("read_current_summary", "update_summary"):
+            memory_patch = patch(f"app.main.{name}")
+            memory_patch.start().return_value = None
+            self.addCleanup(memory_patch.stop)
         authorization = patch(
             "app.main.authorize_customer_access",
             return_value="customer-1",

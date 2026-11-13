@@ -22,6 +22,7 @@ CONVERSATION_TTL_SECONDS = 30 * 24 * 60 * 60
 CONVERSATION_LOCK_TTL_SECONDS = 15 * 60
 CONVERSATION_LOCK_WAIT_SECONDS = 5
 MAX_CONTEXT_MESSAGES = 20
+MAX_CONTEXT_CHARACTERS = 16000
 
 
 class ConversationMemoryError(RuntimeError):
@@ -131,7 +132,21 @@ class ConversationHistory:
             raise ConversationMemoryError(
                 "Could not decode Redis conversation history"
             ) from exc
-        return messages
+        compacted: list[BaseMessage] = []
+        remaining = MAX_CONTEXT_CHARACTERS
+        for message in reversed(messages):
+            if remaining <= 0:
+                break
+            content = message.content
+            if not isinstance(content, str):
+                raise ConversationMemoryError("Invalid conversation message content")
+            if len(content) > remaining:
+                if compacted:
+                    break
+                message = message.model_copy(update={"content": content[-remaining:]})
+            compacted.append(message)
+            remaining -= len(message.content)
+        return list(reversed(compacted))
 
     def claim_ownership(self) -> None:
         try:
