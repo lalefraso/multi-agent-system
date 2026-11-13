@@ -192,3 +192,37 @@ def transition_escalation(
     except RedisError as exc:
         raise EscalationError("Could not update escalation") from exc
     raise EscalationError("Escalation update conflicted; retry")
+
+
+def reassign_escalation(
+    client: Redis, escalation_id: UUID, principal_id: str
+) -> Escalation:
+    key, _ = find_escalation(client, escalation_id)
+    operator = _principal_hash(principal_id)
+    try:
+        for _ in range(5):
+            with client.pipeline() as transaction:
+                try:
+                    transaction.watch(key)
+                    value = transaction.get(key)
+                    if value is None:
+                        raise EscalationNotFoundError("Escalation not found")
+                    escalation = _read_record(value, key)
+                    if escalation.escalation_id != escalation_id:
+                        raise EscalationNotFoundError("Escalation not found")
+                    if escalation.status != EscalationStatus.TAKEN:
+                        raise EscalationTransitionError(
+                            "Only taken escalations can be reassigned"
+                        )
+                    if escalation.taken_by == operator:
+                        return escalation
+                    escalation.taken_by = operator
+                    transaction.multi()
+                    transaction.set(key, escalation.model_dump_json())
+                    transaction.execute()
+                    return escalation
+                except WatchError:
+                    continue
+    except RedisError as exc:
+        raise EscalationError("Could not reassign escalation") from exc
+    raise EscalationError("Escalation reassignment conflicted; retry")

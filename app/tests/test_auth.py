@@ -12,6 +12,7 @@ from jwt.exceptions import PyJWKClientConnectionError
 
 from app.auth import AuthenticatedPrincipal, require_authenticated_user
 from app.main import app
+from getnet_ingestion.schema import MANAGER_SET_KEY, OPERATOR_SET_KEY
 
 
 class AuthenticationTests(unittest.TestCase):
@@ -156,11 +157,16 @@ class AuthenticationTests(unittest.TestCase):
         with patch("app.operator_authorization._client", return_value=redis):
             response = TestClient(app).get("/operator/escalations", headers=headers)
         self.assertEqual(response.status_code, 403)
-        redis.sismember.assert_called_once()
+        self.assertEqual(
+            [call.args[0] for call in redis.sismember.call_args_list],
+            [MANAGER_SET_KEY, OPERATOR_SET_KEY],
+        )
 
     def test_operator_endpoint_accepts_valid_token_and_operator_membership(self):
         authorization_client = Mock()
-        authorization_client.sismember.return_value = True
+        authorization_client.sismember.side_effect = (
+            lambda key, _principal_hash: key == OPERATOR_SET_KEY
+        )
         headers = {"Authorization": f"Bearer {self._token()}"}
         with (
             patch("app.operator_authorization._client", return_value=authorization_client),
