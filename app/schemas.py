@@ -84,6 +84,22 @@ class ExternalResourceSearchInput(BaseModel):
     query: str = Field(min_length=1, max_length=4000)
 
 
+class ExchangeRateCountry(StrEnum):
+    ARGENTINA = "argentina"
+    BRAZIL = "brazil"
+    CHILE = "chile"
+    MEXICO = "mexico"
+    PORTUGAL = "portugal"
+    SPAIN = "spain"
+    PARAGUAY = "paraguay"
+
+
+class ExchangeRateSearchInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    country: ExchangeRateCountry
+
+
 class AgentResult(BaseModel):
     agent: AgentName
     status: AgentStatus

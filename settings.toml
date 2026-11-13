@@ -25,3 +25,6 @@ allowed_urls = [
   "https://youtu.be/rO-eQjus800",
   "https://youtu.be/uZP0-GU0cHs",
 ]
+
+# Add exact, verified official pages for each country to enable exchange rates.
+[knowledge.exchange_rate_urls]

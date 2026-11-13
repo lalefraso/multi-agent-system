@@ -55,6 +55,38 @@ from the user's query, passes only configured URLs to Tavily, and filters
 returned source URLs against that exact list. Set `TAVILY_API_KEY` in `.env`
 when enabling external lookup.
 
+### Exchange-rate references
+
+The knowledge agent can also look for the latest published central-bank
+reference rate for USD/ARS, USD/BRL, USD/CLP, USD/MXN and USD/PYG, or EUR/USD
+for Portugal and Spain. These are reference rates, **not Getnet rates**. The
+agent should cite the source and publication date, and say when it cannot
+verify the rate. Historical rates, other currency pairs, calculated cross
+rates and Getnet-applied rates are outside this feature.
+
+Exchange-rate lookup is disabled by default, independently of
+`[knowledge].allowed_urls`. A trusted administrator must verify and configure
+the exact HTTPS pages that actually publish the relevant rates:
+
+```toml
+[knowledge.exchange_rate_urls]
+# mexico = ["https://www.banxico.org.mx/path-to-a-verified-rate-page"]
+```
+
+The example is a placeholder, not a verified page. The supported keys and
+permitted hosts are `argentina` (bcra.gob.ar), `brazil` (bcb.gov.br),
+`chile` (bcentral.cl), `mexico` (banxico.org.mx), `portugal` and `spain`
+(ecb.europa.eu), and `paraguay` (bcp.gov.py); the corresponding `www` host is
+also allowed. Add only exact pages from the appropriate host, not arbitrary
+subdomains. Portugal and Spain must each be configured if both are needed.
+Tavily Extract receives only those configured URLs and a fixed country-pair
+query; returned URLs must match the configured pages. User-supplied URLs and
+links discovered in retrieved content are not opened. A page may be
+inaccessible or omit the required rate or date; configuring it does not
+guarantee a current result. The application does not independently verify the
+date or accuracy of model-interpreted page content. Verify page accessibility,
+content, and freshness before enabling a source, and set `TAVILY_API_KEY`.
+
 The server binds the authorized customer ID to the customer support agent and
 each of its tools; neither model can supply or change that ID. The router sends
 the user's question as `query`, and the support agent uses:

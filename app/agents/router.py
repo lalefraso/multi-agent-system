@@ -9,9 +9,10 @@ from app.llm import ProviderFallbackMiddleware, build_chat_model
 
 
 ROUTER_SYSTEM_PROMPT = """You are the Getnet support router.
-Choose the knowledge_agent for questions about Getnet products, services, and
-general product guidance, including general troubleshooting. Choose the
-customer_support_agent when a request needs account-specific or transaction
+Choose the knowledge_agent for questions about Getnet products, services,
+general product guidance, general troubleshooting, and central-bank
+exchange-rate references. Choose the customer_support_agent when a request
+needs account-specific or transaction
 data for the requesting customer.
 You may use both tools when a request genuinely needs both. Never answer
 Getnet or customer-specific factual questions from memory or guess; use the
