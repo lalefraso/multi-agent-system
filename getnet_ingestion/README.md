@@ -69,9 +69,9 @@ getnet:terminals:<customer_id>
 getnet:transactions:<customer_id>
 getnet:section:<document_id>              # existing knowledge index documents
 chat:history:<session_hash>               # conversation list and :lock
-chat:conversation-owner:<conversation_id>
-chat:authz:principal:<principal_hash>:customers
-chat:authz:customer:<customer_hash>:owner
+chat:conversations:<conversation_id>:owner
+chat:authz:principals:<principal_hash>:customers
+chat:authz:customers:<customer_hash>:owner
 chat:authz:operators
 chat:escalation:conversation:<conversation_id>
 ```
@@ -113,3 +113,8 @@ not across the whole migration. If interrupted or a Redis error occurs, keep
 writers stopped, resolve the error and rerun both commands; already moved keys
 are skipped. The initializer refuses to run while old keys remain to avoid
 creating new records before migration.
+
+The migration also moves `chat:conversation-owner:*` and the singular
+`chat:authz:principal:*` and `chat:authz:customer:*` keys used by the previous
+version. Authorization indexes and conversation ownership remain separate;
+their values and expiry policies are unchanged.

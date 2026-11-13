@@ -80,7 +80,7 @@ validates the JWT signature (RS256), issuer, audience, expiration, and subject
 against the provider's signing keys. The verified principal is the pair of
 issuer and `sub`; it is not itself a customer ID. Server-side authorization
 uses a Redis Set of customer IDs for each principal. Its key is
-`chat:authz:principal:<sha256(issuer + NUL + sub)>:customers`; only trusted
+`chat:authz:principals:<sha256(issuer + NUL + sub)>:customers`; only trusted
 administrative provisioning should modify these Sets. If the principal has
 one customer, the API selects it automatically. If it has multiple customers,
 the request must select one with `customer_id`; the API checks membership
@@ -88,7 +88,7 @@ before creating the agent. A supplied ID is only a selection, never proof of
 access. This first version assumes each existing customer record belongs to
 one principal; shared customer/merchant accounts need an explicit different
 business rule. Each customer ID also has a unique reverse owner key:
-`chat:authz:customer:<sha256(customer_id)>:owner`. Grant/revoke operations
+`chat:authz:customers:<sha256(customer_id)>:owner`. Grant/revoke operations
 update the principal Set and reverse owner atomically in Redis. A second
 principal cannot be granted the same customer, and authorization checks the
 reverse owner before using a customer record. Missing or invalid tokens are

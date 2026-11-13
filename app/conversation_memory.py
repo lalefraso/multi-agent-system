@@ -13,7 +13,9 @@ from app.escalation import (
 )
 from app.schemas import EscalationReason
 from getnet_ingestion.redis_store import RedisStoreError, _resolve_redis_url
-from getnet_ingestion.schema import CONVERSATION_OWNER_PREFIX, HISTORY_KEY_PREFIX
+from getnet_ingestion.schema import (
+    CONVERSATION_OWNER_PREFIX, CONVERSATION_OWNER_SUFFIX, HISTORY_KEY_PREFIX,
+)
 
 
 CONVERSATION_TTL_SECONDS = 30 * 24 * 60 * 60
@@ -61,7 +63,7 @@ class ConversationHistory:
             owner_identity = f"{principal_id}\0{customer_id}".encode("utf-8")
             self._owner_token = hashlib.sha256(owner_identity).hexdigest()
             self._owner_key = (
-                f"{CONVERSATION_OWNER_PREFIX}{conversation_id}"
+                f"{CONVERSATION_OWNER_PREFIX}{conversation_id}{CONVERSATION_OWNER_SUFFIX}"
             )
             self._key = (
                 f"{HISTORY_KEY_PREFIX}"

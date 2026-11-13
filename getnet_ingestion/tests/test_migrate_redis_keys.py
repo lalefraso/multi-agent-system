@@ -57,9 +57,9 @@ class MigrationTests(unittest.TestCase):
             "getnet:terminals:1": original["customers:terminals:1"],
             "chat:history:abc": original["getnet:chat:abc"],
             "chat:history:abc:lock": original["getnet:chat:abc:lock"],
-            "chat:conversation-owner:uuid": original["getnet:conversation-owner:uuid"],
-            "chat:authz:principal:hash:customers": original["getnet:authz:principal:hash:customers"],
-            "chat:authz:customer:hash:owner": original["getnet:authz:customer:hash:owner"],
+            "chat:conversations:uuid:owner": original["getnet:conversation-owner:uuid"],
+            "chat:authz:principals:hash:customers": original["getnet:authz:principal:hash:customers"],
+            "chat:authz:customers:hash:owner": original["getnet:authz:customer:hash:owner"],
             "chat:authz:operators": original["getnet:authz:operators"],
             "chat:escalation:conversation:uuid": original["getnet:escalation:conversation:uuid"],
             "getnet:section:document": original["getnet:section:document"],
@@ -67,6 +67,33 @@ class MigrationTests(unittest.TestCase):
         self.assertEqual(client.data, expected)
         self.assertFalse(has_old_keys(client))
         self.assertEqual(migrate_keys(client, apply=True), 0)
+
+    def test_moves_previous_chat_namespaces_without_changing_values_or_ttls(self):
+        original = {
+            "chat:conversation-owner:uuid": ("string", "owner", 600),
+            "chat:authz:principal:hash:customers": ("set", {"1"}, None),
+            "chat:authz:customer:hash:owner": ("string", "hash", None),
+            "chat:authz:operators": ("set", {"operator"}, None),
+        }
+        client = FakeRedis(original)
+        self.assertEqual(migrate_keys(client, apply=True), 3)
+        self.assertEqual(client.data, {
+            "chat:conversations:uuid:owner": original["chat:conversation-owner:uuid"],
+            "chat:authz:principals:hash:customers": original["chat:authz:principal:hash:customers"],
+            "chat:authz:customers:hash:owner": original["chat:authz:customer:hash:owner"],
+            "chat:authz:operators": original["chat:authz:operators"],
+        })
+        self.assertFalse(has_old_keys(client))
+
+    def test_versions_of_same_authorization_conflict_before_writes(self):
+        original = {
+            "getnet:authz:principal:hash:customers": "old",
+            "chat:authz:principal:hash:customers": "previous",
+        }
+        client = FakeRedis(original)
+        with self.assertRaisesRegex(RedisMigrationError, "Conflicting"):
+            migrate_keys(client, apply=True)
+        self.assertEqual(client.data, original)
 
     def test_existing_destination_rejects_all_moves(self):
         original = {

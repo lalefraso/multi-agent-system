@@ -9,7 +9,10 @@ from redis.exceptions import RedisError
 from getnet_ingestion.redis_store import RedisStoreError, _resolve_redis_url
 from getnet_ingestion.schema import (
     CONVERSATION_OWNER_PREFIX,
+    CONVERSATION_OWNER_SUFFIX,
     CUSTOMER_KEY_PREFIX,
+    CUSTOMER_MEMBERSHIP_PREFIX,
+    CUSTOMER_OWNER_PREFIX,
     ESCALATION_KEY_PREFIX,
     HISTORY_KEY_PREFIX,
     LEGACY_CUSTOMER_KEY_PREFIX,
@@ -19,14 +22,19 @@ from getnet_ingestion.schema import (
 
 
 KEY_MAPPINGS = (
-    ("customers:customer:", CUSTOMER_KEY_PREFIX),
-    (LEGACY_CUSTOMER_KEY_PREFIX, CUSTOMER_KEY_PREFIX),
-    ("customers:transactions:", TRANSACTIONS_KEY_PREFIX),
-    ("customers:terminals:", TERMINALS_KEY_PREFIX),
-    ("getnet:chat:", HISTORY_KEY_PREFIX),
-    ("getnet:conversation-owner:", CONVERSATION_OWNER_PREFIX),
-    ("getnet:authz:", "chat:authz:"),
-    ("getnet:escalation:conversation:", ESCALATION_KEY_PREFIX),
+    ("customers:customer:", CUSTOMER_KEY_PREFIX, ""),
+    (LEGACY_CUSTOMER_KEY_PREFIX, CUSTOMER_KEY_PREFIX, ""),
+    ("customers:transactions:", TRANSACTIONS_KEY_PREFIX, ""),
+    ("customers:terminals:", TERMINALS_KEY_PREFIX, ""),
+    ("getnet:chat:", HISTORY_KEY_PREFIX, ""),
+    ("getnet:conversation-owner:", CONVERSATION_OWNER_PREFIX, CONVERSATION_OWNER_SUFFIX),
+    ("chat:conversation-owner:", CONVERSATION_OWNER_PREFIX, CONVERSATION_OWNER_SUFFIX),
+    ("getnet:authz:principal:", CUSTOMER_MEMBERSHIP_PREFIX, ""),
+    ("chat:authz:principal:", CUSTOMER_MEMBERSHIP_PREFIX, ""),
+    ("getnet:authz:customer:", CUSTOMER_OWNER_PREFIX, ""),
+    ("chat:authz:customer:", CUSTOMER_OWNER_PREFIX, ""),
+    ("getnet:authz:", "chat:authz:", ""),
+    ("getnet:escalation:conversation:", ESCALATION_KEY_PREFIX, ""),
 )
 
 
@@ -37,7 +45,7 @@ class RedisMigrationError(RuntimeError):
 def has_old_keys(client: Redis) -> bool:
     return any(
         next(client.scan_iter(match=f"{old}*", count=100), None) is not None
-        for old, _ in KEY_MAPPINGS
+        for old, _, _ in KEY_MAPPINGS
     )
 
 
@@ -45,11 +53,11 @@ def migrate_keys(client: Redis, *, apply: bool = False) -> int:
     try:
         moves: dict[str, str] = {}
         destinations: set[str] = set()
-        for old, new in KEY_MAPPINGS:
+        for old, new, suffix in KEY_MAPPINGS:
             for source in client.scan_iter(match=f"{old}*", count=100):
                 if source in moves:
                     continue
-                destination = new + source[len(old):]
+                destination = new + source[len(old):] + suffix
                 if destination in destinations or client.exists(destination):
                     raise RedisMigrationError(
                         "Conflicting destination keys found; no keys were moved. "

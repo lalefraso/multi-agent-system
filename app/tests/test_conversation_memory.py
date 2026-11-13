@@ -10,6 +10,7 @@ from app.conversation_memory import (
     CONVERSATION_LOCK_TTL_SECONDS,
     CONVERSATION_LOCK_WAIT_SECONDS,
     CONVERSATION_OWNER_PREFIX,
+    CONVERSATION_OWNER_SUFFIX,
     CONVERSATION_TTL_SECONDS,
     HISTORY_KEY_PREFIX,
     MAX_CONTEXT_MESSAGES,
@@ -43,7 +44,7 @@ class ConversationHistoryTests(unittest.TestCase):
         )
         self.assertEqual(
             history._owner_key,
-            f"{CONVERSATION_OWNER_PREFIX}{conversation_id}",
+            f"{CONVERSATION_OWNER_PREFIX}{conversation_id}{CONVERSATION_OWNER_SUFFIX}",
         )
         self.assertNotEqual(
             history._key,
