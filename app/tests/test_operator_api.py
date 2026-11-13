@@ -2,6 +2,7 @@ import fnmatch
 import hashlib
 import json
 import unittest
+from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 from uuid import uuid4
 
@@ -12,7 +13,7 @@ from app.auth import AuthenticatedPrincipal, require_authenticated_user
 from app.authorization import _principal_hash
 from app.escalation import EscalationDraft, create_escalation
 from app.main import app
-from app.operator_authorization import OPERATOR_SET_KEY
+from app.operator_authorization import MANAGER_SET_KEY, OPERATOR_SET_KEY
 from app.manage_operators import main as manage_operators
 from app.schemas import EscalationReason
 from app.tests.test_escalation import FakeRedis
@@ -98,6 +99,8 @@ class OperatorAPITests(unittest.TestCase):
         self.redis = OperatorRedis()
         self.principal = "https://issuer.example/\0operator-a"
         self.redis.sadd(OPERATOR_SET_KEY, _principal_hash(self.principal))
+        self.manager_principal = "https://issuer.example/\0manager-a"
+        self.redis.sadd(MANAGER_SET_KEY, _principal_hash(self.manager_principal))
         self.auth = patch("app.operator_authorization._client", return_value=self.redis)
         self.auth.start()
         self.addCleanup(self.auth.stop)
@@ -119,6 +122,7 @@ class OperatorAPITests(unittest.TestCase):
         response = self.client.get("/operator/escalations?status=pending")
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["items"][0]["escalation_id"], str(self.record.escalation_id))
+        self.assertFalse(response.json()["items"][0]["overdue"])
         self.assertIsNone(response.json()["next_offset"])
         detail = self.client.get(self.path)
         self.assertEqual(detail.status_code, 200)
@@ -149,6 +153,101 @@ class OperatorAPITests(unittest.TestCase):
         self.assertIsNotNone(closed.json()["closed_at"])
         self.assertEqual(self.client.patch(self.path + "/status", json={"status": "closed"}).json(), closed.json())
         self.assertEqual(self.client.patch(self.path + "/status", json={"status": "taken"}).status_code, 409)
+
+    def test_operator_visibility_and_manager_reassignment(self):
+        other_principal = "https://issuer.example/\0operator-b"
+        self.redis.sadd(OPERATOR_SET_KEY, _principal_hash(other_principal))
+
+        self.assertEqual(
+            self.client.patch(
+                self.path + "/status", json={"status": "taken"}
+            ).status_code,
+            200,
+        )
+        self.principal = other_principal
+        self.assertEqual(self.client.get(self.path).status_code, 404)
+        taken = self.client.get("/operator/escalations?status=taken").json()
+        self.assertEqual(taken["items"], [])
+        self.assertEqual(
+            self.client.patch(
+                self.path + "/assignment",
+                json={"issuer": "https://issuer.example/", "subject": "operator-a"},
+            ).status_code,
+            403,
+        )
+
+        self.principal = self.manager_principal
+        manager_detail = self.client.get(self.path)
+        self.assertEqual(manager_detail.status_code, 200)
+        manager_queue = self.client.get("/operator/escalations?status=taken")
+        self.assertEqual(
+            manager_queue.json()["items"][0]["escalation_id"],
+            str(self.record.escalation_id),
+        )
+        self.assertEqual(
+            self.client.patch(
+                self.path + "/status", json={"status": "closed"}
+            ).status_code,
+            403,
+        )
+        reassigned = self.client.patch(
+            self.path + "/assignment",
+            json={"issuer": "https://issuer.example/", "subject": "operator-b"},
+        )
+        self.assertEqual(reassigned.status_code, 200)
+        self.assertEqual(
+            reassigned.json()["assigned_to"], _principal_hash(other_principal)
+        )
+        self.principal = other_principal
+        self.assertEqual(self.client.get(self.path).status_code, 200)
+        self.assertEqual(
+            self.client.patch(
+                self.path + "/status", json={"status": "closed"}
+            ).status_code,
+            200,
+        )
+
+    def test_manager_can_only_reassign_taken_cases_to_authorized_operators(self):
+        self.principal = self.manager_principal
+        unauthorized = self.client.patch(
+            self.path + "/assignment",
+            json={"issuer": "https://issuer.example/", "subject": "unknown"},
+        )
+        self.assertEqual(unauthorized.status_code, 422)
+        self.assertEqual(
+            self.client.patch(
+                self.path + "/assignment",
+                json={"issuer": "https://issuer.example/", "subject": "operator-a"},
+            ).status_code,
+            409,
+        )
+        self.assertEqual(
+            self.client.get("/operator/escalations?status=pending").json()["items"][0][
+                "overdue"
+            ],
+            False,
+        )
+
+    def test_staff_identity_cannot_have_both_roles(self):
+        self.redis.sadd(MANAGER_SET_KEY, _principal_hash(self.principal))
+        self.assertEqual(self.client.get("/operator/escalations").status_code, 403)
+
+    def test_pending_case_warning_is_calculated_after_one_hour(self):
+        fixed_now = datetime(2026, 11, 13, 12, 0, tzinfo=timezone.utc)
+        key = next(iter(self.redis.data))
+        self.record.created_at = fixed_now - timedelta(hours=1, seconds=1)
+        self.redis.set(key, self.record.model_dump_json())
+        with patch("app.operator_api.datetime") as mocked_datetime:
+            mocked_datetime.now.return_value = fixed_now
+            response = self.client.get("/operator/escalations?status=pending")
+        self.assertTrue(response.json()["items"][0]["overdue"])
+
+        self.record.created_at = fixed_now - timedelta(hours=1)
+        self.redis.set(key, self.record.model_dump_json())
+        with patch("app.operator_api.datetime") as mocked_datetime:
+            mocked_datetime.now.return_value = fixed_now
+            response = self.client.get("/operator/escalations?status=pending")
+        self.assertFalse(response.json()["items"][0]["overdue"])
 
     def test_pagination_and_old_records(self):
         key = next(iter(self.redis.data))
@@ -244,6 +343,13 @@ class OperatorAPITests(unittest.TestCase):
             self.assertNotIn(
                 _principal_hash("https://issuer.example/\0operator-b"),
                 self.redis.sets[OPERATOR_SET_KEY],
+            )
+            self.assertEqual(
+                manage_operators(["grant", "--role", "manager", *args]), 0
+            )
+            self.assertIn(
+                _principal_hash("https://issuer.example/\0operator-b"),
+                self.redis.sets[MANAGER_SET_KEY],
             )
             self.assertEqual(manage_operators(["grant", "--issuer", "http://bad", "--subject", "x"]), 1)
 
