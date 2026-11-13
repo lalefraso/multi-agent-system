@@ -7,6 +7,7 @@ import sys
 from redis import Redis
 from redis.exceptions import RedisError
 
+from getnet_ingestion.migrate_redis_keys import has_old_keys
 from getnet_ingestion.redis_store import (
     RedisStoreError,
     _resolve_redis_url,
@@ -207,22 +208,27 @@ def seed_redis(
     except RedisStoreError as exc:
         raise RedisSeedError(str(exc)) from exc
 
-    embeddings = tuple(embeddings_for_locale(locale) for locale in ("en", "mx"))
-    try:
-        sections_loaded = persist_corpora(
-            embeddings,
-            redis_url=connection_url,
-            recreate_index=recreate_index,
-        )
-    except RedisStoreError as exc:
-        raise RedisSeedError(
-            "Could not load the Getnet knowledge index. Generate both locale "
-            f"embedding files first: {exc}"
-        ) from exc
-
     client = Redis.from_url(connection_url, decode_responses=True)
     try:
         client.ping()
+        if has_old_keys(client):
+            raise RedisSeedError(
+                "Old Redis keys detected. Stop all writers and migrate them "
+                "with python -m getnet_ingestion.migrate_redis_keys --apply "
+                "before initializing."
+            )
+        embeddings = tuple(embeddings_for_locale(locale) for locale in ("en", "mx"))
+        try:
+            sections_loaded = persist_corpora(
+                embeddings,
+                redis_url=connection_url,
+                recreate_index=recreate_index,
+            )
+        except RedisStoreError as exc:
+            raise RedisSeedError(
+                "Could not load the Getnet knowledge index. Generate both locale "
+                f"embedding files first: {exc}"
+            ) from exc
         customers_created, customers_skipped = seed_synthetic_customers(client)
         support_created, support_skipped = seed_synthetic_support_data(client)
     except RedisError as exc:

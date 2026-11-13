@@ -9,9 +9,7 @@ from redis.exceptions import RedisError, WatchError
 
 from app.authorization import _principal_hash
 from app.schemas import EscalationReason, EscalationStatus
-
-
-ESCALATION_KEY_PREFIX = "getnet:escalation:conversation:"
+from getnet_ingestion.schema import ESCALATION_KEY_PREFIX
 
 
 class EscalationError(RuntimeError):

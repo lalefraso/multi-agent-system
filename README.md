@@ -59,12 +59,12 @@ The server binds the authorized customer ID to the customer support agent and
 each of its tools; neither model can supply or change that ID. The router sends
 the user's question as `query`, and the support agent uses:
 
-- `get_account`: account fields only, from `customers:customer:<customer_id>`;
+- `get_account`: account fields only, from `getnet:customers:<customer_id>`;
   falls back to `getnet_users:customer:<customer_id>`.
-- `get_transactions`: `customers:transactions:<customer_id>`, with optional
+- `get_transactions`: `getnet:transactions:<customer_id>`, with optional
   status, inclusive local `start_date`/`end_date` (YYYY-MM-DD), payment method,
   and transaction ID filters.
-- `get_terminal_status`: `customers:terminals:<customer_id>`, with optional
+- `get_terminal_status`: `getnet:terminals:<customer_id>`, with optional
   status, terminal ID, and case-insensitive exact model filters.
 
 Transaction and terminal datasets are JSON arrays in Redis. Each tool returns
@@ -80,7 +80,7 @@ validates the JWT signature (RS256), issuer, audience, expiration, and subject
 against the provider's signing keys. The verified principal is the pair of
 issuer and `sub`; it is not itself a customer ID. Server-side authorization
 uses a Redis Set of customer IDs for each principal. Its key is
-`getnet:authz:principal:<sha256(issuer + NUL + sub)>:customers`; only trusted
+`chat:authz:principal:<sha256(issuer + NUL + sub)>:customers`; only trusted
 administrative provisioning should modify these Sets. If the principal has
 one customer, the API selects it automatically. If it has multiple customers,
 the request must select one with `customer_id`; the API checks membership
@@ -88,7 +88,7 @@ before creating the agent. A supplied ID is only a selection, never proof of
 access. This first version assumes each existing customer record belongs to
 one principal; shared customer/merchant accounts need an explicit different
 business rule. Each customer ID also has a unique reverse owner key:
-`getnet:authz:customer:<sha256(customer_id)>:owner`. Grant/revoke operations
+`chat:authz:customer:<sha256(customer_id)>:owner`. Grant/revoke operations
 update the principal Set and reverse owner atomically in Redis. A second
 principal cannot be granted the same customer, and authorization checks the
 reverse owner before using a customer record. Missing or invalid tokens are
@@ -176,7 +176,7 @@ python -m app.manage_operators revoke \
   --issuer 'https://issuer.example/' --subject 'operator-subject'
 ```
 
-Only trusted administrators may change `getnet:authz:operators`; entries are
+Only trusted administrators may change `chat:authz:operators`; entries are
 SHA-256 hashes of `issuer + NUL + subject`, not bearer tokens. Revocation prevents
 subsequent requests, but does not reassign existing cases. If an assigned
 operator loses access, an administrator must restore that operator's access
@@ -272,7 +272,7 @@ docker compose up --build
 
 On startup, Compose runs `getnet_ingestion.seed` once before the API. It loads
 the English and Mexico Getnet embeddings from `getnet_ingestion/data/` and adds
-five synthetic customer records under `customers:customer:*`. Existing
+five synthetic customer records under `getnet:customers:*`. Existing
 customer records are preserved. It also seeds transaction and terminal arrays
 under their respective customer-scoped prefixes, including empty arrays for
 customers with no example records. Each key is created only if absent, so
@@ -280,8 +280,9 @@ existing datasets are not updated on subsequent runs. These are fixed,
 fictional examples, not current transactional data. The Compose services explicitly use their
 local Redis container even if `.env` contains a `GETNET_REDIS_URL` for another
 environment. Redis key prefixes appear as groups (not real folders) in Redis
-browser tools: Getnet keys use `getnet:*`, while synthetic customers use
-`customers:*`.
+browser tools: business data uses `getnet:*` and support state uses `chat:*`.
+Existing installations must migrate before starting the new version or the
+initializer; see [Redis key migration](./getnet_ingestion/README.md#redis-key-migration).
 Run the same `python -m getnet_ingestion.seed` command with the production Redis
 URL to initialize that environment with the identical key and index structure.
 

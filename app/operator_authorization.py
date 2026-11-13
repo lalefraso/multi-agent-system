@@ -7,9 +7,9 @@ from redis.exceptions import RedisError
 from app.auth import AuthenticatedPrincipal, require_authenticated_user
 from app.authorization import _principal_hash
 from getnet_ingestion.redis_store import RedisStoreError, _resolve_redis_url
+from getnet_ingestion.schema import OPERATOR_SET_KEY
 
 
-OPERATOR_SET_KEY = "getnet:authz:operators"
 
 
 class OperatorAuthorizationError(RuntimeError):

@@ -13,14 +13,13 @@ from app.escalation import (
 )
 from app.schemas import EscalationReason
 from getnet_ingestion.redis_store import RedisStoreError, _resolve_redis_url
+from getnet_ingestion.schema import CONVERSATION_OWNER_PREFIX, HISTORY_KEY_PREFIX
 
 
 CONVERSATION_TTL_SECONDS = 30 * 24 * 60 * 60
 CONVERSATION_LOCK_TTL_SECONDS = 15 * 60
 CONVERSATION_LOCK_WAIT_SECONDS = 5
 MAX_CONTEXT_MESSAGES = 20
-HISTORY_KEY_PREFIX = "getnet:chat:"
-CONVERSATION_OWNER_PREFIX = "getnet:conversation-owner:"
 
 
 class ConversationMemoryError(RuntimeError):

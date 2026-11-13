@@ -6,10 +6,8 @@ from redis import Redis
 from redis.exceptions import RedisError
 
 from getnet_ingestion.redis_store import RedisStoreError, _resolve_redis_url
+from getnet_ingestion.schema import CUSTOMER_MEMBERSHIP_PREFIX, CUSTOMER_OWNER_PREFIX
 
-
-CUSTOMER_MEMBERSHIP_PREFIX = "getnet:authz:principal:"
-CUSTOMER_OWNER_PREFIX = "getnet:authz:customer:"
 
 _GRANT_CUSTOMER_SCRIPT = """
 local owner = redis.call("GET", KEYS[2])

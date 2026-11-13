@@ -64,10 +64,10 @@ class CustomerDataTests(unittest.TestCase):
             "redis://test", decode_responses=True
         )
         client.type.assert_called_once_with(
-            "customers:customer:cliente1988"
+            "getnet:customers:cliente1988"
         )
         client.hgetall.assert_called_once_with(
-            "customers:customer:cliente1988"
+            "getnet:customers:cliente1988"
         )
         client.close.assert_called_once_with()
 
@@ -94,7 +94,7 @@ class CustomerDataTests(unittest.TestCase):
 
         self.assertEqual(json.loads(result), {"account_status": "active"})
         client.json.return_value.get.assert_called_once_with(
-            "customers:customer:cliente1988"
+            "getnet:customers:cliente1988"
         )
         client.close.assert_called_once_with()
 
@@ -113,7 +113,7 @@ class CustomerDataTests(unittest.TestCase):
         self.assertEqual(
             [call.args[0] for call in client.type.call_args_list],
             [
-                "customers:customer:cliente1988",
+                "getnet:customers:cliente1988",
                 "getnet_users:customer:cliente1988",
             ],
         )

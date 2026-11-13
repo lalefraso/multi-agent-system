@@ -31,7 +31,7 @@ The resulting `getnet_<locale>_embeddings.jsonl` files are also git-ignored. Ret
 
 ## Persist in Redis
 
-Redis persistence stores each embedding as a hash under the shared `getnet:section:<id>` namespace and creates the `idx:getnet` Redis Search HNSW index using cosine distance. English and Mexico records remain distinguishable through their `language` field. Synthetic customer JSON records use the `customers:customer:<customer_id>` key namespace. These namespaces and the vector index are the same in local and production Redis; only the connection URL changes. In Redis browser tools the prefixes appear as logical groups, not actual folders. Redis Stack or a Redis service with the Search/vector module enabled is required.
+Redis persistence stores each embedding as a hash under the shared `getnet:section:<id>` namespace and creates the `idx:getnet` Redis Search HNSW index using cosine distance. English and Mexico records remain distinguishable through their `language` field. Synthetic customer JSON records use the `getnet:customers:<customer_id>` key namespace. These namespaces and the vector index are the same in local and production Redis; only the connection URL changes. In Redis browser tools the prefixes appear as logical groups, not actual folders. Redis Stack or a Redis service with the Search/vector module enabled is required.
 
 ```bash
 .venv/bin/python -m getnet_ingestion.redis_store --locale all --recreate-index
@@ -47,8 +47,8 @@ The store validates the embedding model, dimensions, finite vector values, and u
 
 Use the same initializer for local or production Redis. It upserts both locale
 corpora into `idx:getnet` and adds five synthetic customer records plus their
-fictional transaction and terminal arrays under `customers:transactions:<customer_id>`
-and `customers:terminals:<customer_id>`. Each key is only created if absent;
+fictional transaction and terminal arrays under `getnet:transactions:<customer_id>`
+and `getnet:terminals:<customer_id>`. Each key is only created if absent;
 existing customer and support data is not overwritten or refreshed:
 
 ```bash
@@ -58,3 +58,58 @@ existing customer and support data is not overwritten or refreshed:
 Set `GETNET_REDIS_URL` (or `REDIS_URL`) in the environment or repository-root `.env` to select the target. For a one-off target, pass `--redis-url`. Confirm the target URL before running this command against a production deployment. In Docker Compose, the initializer is run automatically against the local Redis service.
 
 To deliberately replace the existing Getnet index and all documents indexed by it, add `--recreate-index`. The command still preserves the customer keys.
+
+### Redis key migration
+
+The logical groups are:
+
+```text
+getnet:customers:<customer_id>
+getnet:terminals:<customer_id>
+getnet:transactions:<customer_id>
+getnet:section:<document_id>              # existing knowledge index documents
+chat:history:<session_hash>               # conversation list and :lock
+chat:conversation-owner:<conversation_id>
+chat:authz:principal:<principal_hash>:customers
+chat:authz:customer:<customer_hash>:owner
+chat:authz:operators
+chat:escalation:conversation:<conversation_id>
+```
+
+Operator authorization is a set under `chat:authz`; the application does not
+currently store operator profiles. `idx:getnet` and `getnet:section:*` remain
+unchanged. Account lookup still supports the older `getnet_users:customer:*`
+namespace as a fallback, but migration moves it too.
+
+Before deploying this version to an existing Redis instance:
+
+1. Stop **all** old and new application instances, seed jobs, provisioning
+   commands and other writers. Do not mix application versions during the
+   migration. Back up Redis and verify the target URL and database.
+2. With writers still stopped, run the dry run and then apply it using the
+   same `GETNET_REDIS_URL`/`REDIS_URL` used by the application, or pass
+   `--redis-url` explicitly:
+
+   ```bash
+   python -m getnet_ingestion.migrate_redis_keys
+   python -m getnet_ingestion.migrate_redis_keys --apply
+   ```
+
+3. If both succeed, deploy the new version, run the initializer if needed,
+   and restart the application. For Docker Compose, build the new image with
+   `docker compose build redis-seed` and start only Redis with
+   `docker compose up -d redis`, then run both commands with
+   `docker compose run --rm --no-deps redis-seed python -m getnet_ingestion.migrate_redis_keys`
+   (add `--apply` to the second command), before `docker compose up --build`.
+   Compose targets its local Redis service, not an external URL in `.env`.
+
+The dry run detects destination collisions before any key moves, including a
+customer present in both old customer namespaces. Resolve conflicts using a
+backup and the authoritative data before retrying; the tool never overwrites
+destinations. It uses Redis `RENAMENX`, preserving values, types and remaining
+TTLs, and requires a single Redis instance where source and destination keys
+can be renamed (not cross-slot Redis Cluster keys). Moves are atomic per key,
+not across the whole migration. If interrupted or a Redis error occurs, keep
+writers stopped, resolve the error and rerun both commands; already moved keys
+are skipped. The initializer refuses to run while old keys remain to avoid
+creating new records before migration.

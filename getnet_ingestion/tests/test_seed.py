@@ -7,6 +7,7 @@ from getnet_ingestion.seed import (
     SYNTHETIC_CUSTOMERS,
     SYNTHETIC_TERMINALS,
     SYNTHETIC_TRANSACTIONS,
+    RedisSeedError,
     seed_redis,
     seed_synthetic_customers,
     seed_synthetic_support_data,
@@ -76,11 +77,26 @@ class SeedTests(unittest.TestCase):
     ):
         client = redis_from_url.return_value
         client.set.return_value = True
+        client.scan_iter.return_value = iter(())
         self.assertEqual(seed_redis(), (5, 0, 42, 10, 0))
         self.assertEqual(embeddings.call_count, 2)
         persist.assert_called_once()
         client.ping.assert_called_once()
         self.assertEqual(client.set.call_count, 15)
+        client.close.assert_called_once()
+
+    @patch("getnet_ingestion.seed.Redis.from_url")
+    @patch("getnet_ingestion.seed.persist_corpora")
+    @patch("getnet_ingestion.seed._resolve_redis_url", return_value="redis://test")
+    def test_seed_refuses_old_keys_before_writing(self, _resolve, persist, redis_from_url):
+        client = redis_from_url.return_value
+        client.scan_iter.return_value = iter(["customers:customer:cliente1988"])
+
+        with self.assertRaisesRegex(RedisSeedError, "Old Redis keys detected"):
+            seed_redis()
+
+        persist.assert_not_called()
+        client.set.assert_not_called()
         client.close.assert_called_once()
 
 

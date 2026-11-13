@@ -199,7 +199,7 @@ class EscalationTests(unittest.TestCase):
             self.assertEqual(summary.calls, 1)
             record = next(
                 value for key, value in redis.data.items()
-                if key.startswith("getnet:escalation:conversation:")
+                if key.startswith("chat:escalation:conversation:")
             )
             self.assertIn("The customer requested a human.", record)
             self.assertNotIn("Otra pregunta", record)
