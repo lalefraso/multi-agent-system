@@ -27,6 +27,17 @@ class KnowledgeSearchTests(unittest.TestCase):
             KNOWLEDGE_SYSTEM_PROMPT,
         )
 
+    def test_prompt_synthesizes_comparisons_without_repeating_caveats(self):
+        self.assertIn(
+            "clearest plain-language takeaway supported by\nthe available descriptions",
+            KNOWLEDGE_SYSTEM_PROMPT,
+        )
+        self.assertIn("State an important limitation once", KNOWLEDGE_SYSTEM_PROMPT)
+        self.assertIn(
+            "synthesize the existing evidence\ninstead of repeating caveats",
+            KNOWLEDGE_SYSTEM_PROMPT,
+        )
+
     @patch("app.agents.knowledge._search_product_name_records")
     @patch("app.agents.knowledge.search_vector_records")
     def test_vector_search_retrieves_candidate_for_cross_language_product_name(
